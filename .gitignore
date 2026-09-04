@@ -1,0 +1,40 @@
+# 环境变量与敏感凭据 (千万不可提交真实 API Key)
+.env
+
+# Python 编译缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+.venv
+env/
+venv/
+ENV/
+
+# 运行轨迹快照与日志
+runs/
+*.log
+
+# IDE 与操作系统元数据
+.DS_Store
+.idea/
+.vscode/
+*.swp
