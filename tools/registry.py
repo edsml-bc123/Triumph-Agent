@@ -15,7 +15,9 @@ triumph-agent 工具注册表与安全执行分发器 (Tool Registry)
 """
 
 import glob as g
+import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -57,6 +59,11 @@ class ToolRegistry:
         if any(d in command for d in dangerous):
             return "Error: Dangerous command blocked by safety policy"
         try:
+            # 将当前运行 Agent 的 Python 解释器所在 bin 目录优先置顶于 PATH
+            child_env = os.environ.copy()
+            current_bin_dir = str(Path(sys.executable).parent)
+            child_env["PATH"] = f"{current_bin_dir}:{child_env.get('PATH', '')}"
+
             r = subprocess.run(
                 command,
                 shell=True,
@@ -65,6 +72,7 @@ class ToolRegistry:
                 text=True,
                 errors="replace",
                 timeout=120,
+                env=child_env,
             )
             out = (r.stdout + r.stderr).strip()
             # 物理截断保护（50000字符），防止上下文被打爆

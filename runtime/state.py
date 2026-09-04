@@ -14,7 +14,6 @@ triumph-agent 状态机与上下文模型 (State Contract)
 """
 
 import sys
-import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from enum import Enum
@@ -28,6 +27,12 @@ if str(_root_dir) not in sys.path:
     sys.path.insert(0, str(_root_dir))
 
 from client import LLMResponse
+
+
+from datetime import datetime, timedelta, timezone
+
+# 显式定义东八区时区 (UTC+8 / Asia/Shanghai)
+CST = timezone(timedelta(hours=8))
 
 
 # ----------------------------------------------------------------------
@@ -56,8 +61,10 @@ class AgentState:
     Agent 运行时的中央状态模型 (Single Source of Truth)
     负责统一维护消息流、运行度量、状态转移与终态控制。
     """
-    # 会话与唯一标识
-    run_id: str = field(default_factory=lambda: f"run_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}")
+    # 会话与唯一标识（严格采用东八区时间戳）
+    run_id: str = field(
+        default_factory=lambda: f"run_{datetime.now(CST).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    )
     status: AgentStatus = AgentStatus.PENDING
 
     # 消息上下文流 (严格遵循 OpenAI / 百炼格式)

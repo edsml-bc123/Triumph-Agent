@@ -17,19 +17,19 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+import time
+from loguru import logger
+
+from client import DashScopeClient
+from runtime.event import TrajectoryRecorder
+from runtime.state import AgentState, AgentStatus
+from tools.registry import ToolRegistry, default_registry
+
 # 确保项目根目录在 sys.path 中
 _current_dir = Path(__file__).resolve().parent
 _root_dir = _current_dir.parent
 if str(_root_dir) not in sys.path:
     sys.path.insert(0, str(_root_dir))
-
-from loguru import logger
-
-from client import DashScopeClient
-from runtime.state import AgentState, AgentStatus
-from tools.registry import ToolRegistry, default_registry
-
-
 # ----------------------------------------------------------------------
 # AgentLoop 核心执行引擎
 # ----------------------------------------------------------------------
@@ -66,9 +66,21 @@ class AgentLoop:
         :param state: 内存状态机实例
         :return: 达到终态（SUCCESS / FAILED）后的状态机
         """
+        # 初始化轨迹记录器 (落盘至工作区的 runs/ 目录)
+        runs_dir = self.registry.workdir / "runs"
+        recorder = TrajectoryRecorder(run_id=state.run_id, runs_dir=runs_dir)
+
         # 1. 确保首条消息包含系统指令 (System Prompt)
         if not any(m.get("role") == "system" for m in state.messages):
             state.messages.insert(0, {"role": "system", "content": self.system_prompt})
+
+        # 提取用户初始 prompt 并记录任务启动事件
+        user_prompt = ""
+        for m in state.messages:
+            if m.get("role") == "user":
+                user_prompt = m.get("content", "")
+                break
+        recorder.record_task_start(prompt=user_prompt, max_steps=state.max_steps)
 
         # 2. 核心自主循环：只要未达到终态，持续推进
         while not state.is_terminal:
@@ -77,6 +89,7 @@ class AgentLoop:
                 logger.warning(f"[CircuitBreaker] {state.last_error}")
                 break
 
+            recorder.record_step_start(state.step_count)
             logger.info(f"[Loop Step {state.step_count}/{state.max_steps}] 模型推理中...")
 
             # 向大模型发起推理请求（注入可用工具 Schema）
@@ -92,6 +105,19 @@ class AgentLoop:
 
             # 将大模型本轮响应结构化写入状态机（累加 Token，记录 tool_calls）
             state.add_assistant_turn(response)
+
+            # 记录大模型推理事件
+            usage_dict = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+            recorder.record_llm_response(
+                content=response.content,
+                finish_reason=response.finish_reason,
+                tool_calls=response.tool_calls,
+                usage=usage_dict,
+            )
 
             # 3. 终态判断分支 (Termination Decision)
             if not response.has_tool_calls:
@@ -115,15 +141,36 @@ class AgentLoop:
 
                 logger.info(f"[Tool Call] {tc.name} | args={args}")
 
-                # 本地安全沙箱派发执行
+                # 本地安全沙箱派发执行并度量耗时
+                tool_start = time.time()
                 output = self.registry.execute(tc.name, args)
+                tool_duration_ms = (time.time() - tool_start) * 1000
+
                 preview = output[:200].replace("\n", " ")
                 if len(output) > 200:
                     preview += "..."
                 logger.debug(f"[Tool Result] {tc.name} -> {preview}")
 
+                # 记录工具执行事件
+                recorder.record_tool_execution(
+                    tool_call_id=tc.id,
+                    tool_name=tc.name,
+                    args=args,
+                    output=output,
+                    duration_ms=tool_duration_ms,
+                )
+
                 # 将物理结果以标准 role: "tool" 绑定唯一 tool_call_id 回填
                 state.add_tool_result(tool_call_id=tc.id, name=tc.name, result=output)
+
+        # 记录任务终态事件
+        recorder.record_task_end(
+            status=state.status.value,
+            total_steps=state.step_count,
+            total_tokens=state.total_tokens,
+            final_answer=state.final_answer,
+            error=state.last_error,
+        )
 
         return state
 
