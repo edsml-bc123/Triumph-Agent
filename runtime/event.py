@@ -65,96 +65,109 @@ class TrajectoryRecorder:
         self.runs_dir.mkdir(parents=True, exist_ok=True)
         self.file_path = self.runs_dir / f"{run_id}.jsonl"
 
-    def record(self, event_type: EventType, data: Dict[str, Any]) -> None:
+    def record(self, event: str, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
         """
-        实时追加写入一条轨迹事件，并强制刷盘 (严格记录东八区时间)
+        单一统一记录方法 (Single Universal Record Method)：
+        所有轨迹事件统一通过此方法追加落盘，保证东八区时间与实时 flush。
+        :param event: 事件名称 (如 TaskStart, StepStart, LLMResponse, ToolExecution, TaskEnd, CircuitBreak 等)
+        :param data: 可选的字典载荷
+        :param kwargs: 任意键值对参数，自动合并入载荷
         """
+        payload = dict(data or {})
+        payload.update(kwargs)
+
         now_cst = datetime.now(CST)
-        event = TrajectoryEvent(
-            event_type=event_type.value,
+        event_entry = TrajectoryEvent(
+            event_type=event,
             run_id=self.run_id,
             timestamp=now_cst.timestamp(),
             cst_time=now_cst.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " CST",
-            data=data,
+            data=payload,
         )
         with open(self.file_path, "a", encoding="utf-8") as f:
-            f.write(event.to_json() + "\n")
+            f.write(event_entry.to_json() + "\n")
             f.flush()
 
-    def record_task_start(self, prompt: str, max_steps: int) -> None:
-        self.record(
-            EventType.TASK_START,
-            {"user_prompt": prompt, "max_steps": max_steps},
-        )
 
-    def record_step_start(self, step_count: int) -> None:
-        self.record(
-            EventType.STEP_START,
-            {"step": step_count},
-        )
+# ----------------------------------------------------------------------
+# 解耦切面插件：运行轨迹实时落盘 (TrajectoryHook)
+# ----------------------------------------------------------------------
 
-    def record_llm_response(
+class TrajectoryHook:
+    """
+    运行轨迹切面插件 (基于 HookManager 统一驱动)
+    职责：监听生命周期切面事件，统一调用 TrajectoryRecorder.record 实施持久化落盘。
+    """
+
+    def __init__(self, runs_dir: Optional[Path] = None):
+        self.runs_dir = runs_dir
+        self._recorder: Optional[TrajectoryRecorder] = None
+
+    def register_to(self, manager: Any) -> None:
+        """显式向 HookManager 注册生命周期回调"""
+        manager.register("UserPromptSubmit", self.on_user_prompt_submit)
+        manager.register("StepStart", self.on_step_start)
+        manager.register("LLMResponse", self.on_llm_response)
+        manager.register("PostToolUse", self.on_post_tool_use)
+        manager.register("Stop", self.on_stop)
+
+    async def on_user_prompt_submit(self, prompt: str, state: Any) -> None:
+        self._recorder = TrajectoryRecorder(run_id=state.run_id, runs_dir=self.runs_dir)
+        self._recorder.record("TaskStart", user_prompt=prompt, max_steps=state.max_steps)
+
+    async def on_step_start(self, step: int, state: Any) -> None:
+        if self._recorder:
+            self._recorder.record("StepStart", step=step)
+
+    async def on_llm_response(self, response: Any, state: Any) -> None:
+        if self._recorder and getattr(response, "usage", None):
+            usage_dict = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+            tool_calls = [
+                {"id": tc.id, "name": tc.name, "arguments": tc.arguments_raw}
+                for tc in getattr(response, "tool_calls", [])
+            ]
+            self._recorder.record(
+                "LLMResponse",
+                content=response.content,
+                finish_reason=response.finish_reason,
+                tool_calls=tool_calls,
+                usage=usage_dict,
+            )
+
+    async def on_post_tool_use(
         self,
-        content: str,
-        finish_reason: str,
-        tool_calls: list,
-        usage: Dict[str, int],
-    ) -> None:
-        self.record(
-            EventType.LLM_RESPONSE,
-            {
-                "content": content,
-                "finish_reason": finish_reason,
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "name": tc.name,
-                        "arguments": tc.arguments_raw,
-                    }
-                    for tc in tool_calls
-                ],
-                "usage": usage,
-            },
-        )
-
-    def record_tool_execution(
-        self,
-        tool_call_id: str,
         tool_name: str,
         args: Dict[str, Any],
         output: str,
         duration_ms: float,
+        tool_call_id: str,
+        state: Any,
     ) -> None:
-        self.record(
-            EventType.TOOL_EXECUTION,
-            {
-                "tool_call_id": tool_call_id,
-                "tool_name": tool_name,
-                "arguments": args,
-                "output_preview": output[:1000],  # 记录适度长度的输出快照
-                "output_length": len(output),
-                "duration_ms": round(duration_ms, 2),
-            },
-        )
+        if self._recorder:
+            self._recorder.record(
+                "ToolExecution",
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                arguments=args,
+                output_preview=output[:1000],
+                output_length=len(output),
+                duration_ms=round(duration_ms, 2),
+            )
 
-    def record_task_end(
-        self,
-        status: str,
-        total_steps: int,
-        total_tokens: int,
-        final_answer: Optional[str] = None,
-        error: Optional[str] = None,
-    ) -> None:
-        self.record(
-            EventType.TASK_END,
-            {
-                "status": status,
-                "total_steps": total_steps,
-                "total_tokens": total_tokens,
-                "final_answer": final_answer,
-                "error": error,
-            },
-        )
+    async def on_stop(self, state: Any) -> None:
+        if self._recorder:
+            self._recorder.record(
+                "TaskEnd",
+                status=state.status.value,
+                total_steps=state.step_count,
+                total_tokens=state.total_tokens,
+                final_answer=state.final_answer,
+                error=state.last_error,
+            )
 
 
 # ----------------------------------------------------------------------
@@ -167,16 +180,16 @@ def _smoke_test():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         recorder = TrajectoryRecorder(run_id="test_run_001", runs_dir=Path(tmpdir))
-        recorder.record_task_start("测试任务", 10)
-        recorder.record_step_start(1)
-        recorder.record_tool_execution("call_1", "bash", {"command": "ls"}, "file1 file2", 15.3)
-        recorder.record_task_end("success", 1, 100, "完成")
+        recorder.record("TaskStart", user_prompt="测试任务", max_steps=10)
+        recorder.record("StepStart", step=1)
+        recorder.record("ToolExecution", tool_call_id="call_1", tool_name="bash", arguments={"command": "ls"}, output="file1 file2", duration_ms=15.3)
+        recorder.record("TaskEnd", status="success", total_steps=1, total_tokens=100, final_answer="完成")
 
         assert recorder.file_path.exists()
         lines = recorder.file_path.read_text(encoding="utf-8").strip().splitlines()
         assert len(lines) == 4
         first_event = json.loads(lines[0])
-        assert first_event["event_type"] == "task_start"
+        assert first_event["event_type"] == "TaskStart"
         assert first_event["data"]["user_prompt"] == "测试任务"
         print(f"轨迹文件生成成功: {len(lines)} 条事件已持久化落盘")
 

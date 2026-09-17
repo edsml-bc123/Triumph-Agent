@@ -17,19 +17,20 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-import time
-from loguru import logger
-
-from client import DashScopeClient
-from runtime.event import TrajectoryRecorder
-from runtime.state import AgentState, AgentStatus
-from tools.registry import ToolRegistry, default_registry
-
 # 确保项目根目录在 sys.path 中
 _current_dir = Path(__file__).resolve().parent
 _root_dir = _current_dir.parent
 if str(_root_dir) not in sys.path:
     sys.path.insert(0, str(_root_dir))
+
+import time
+from loguru import logger
+
+from client import DashScopeClient
+from runtime.event import TrajectoryHook
+from runtime.hooks import HookManager
+from runtime.state import AgentState, AgentStatus
+from tools.registry import ToolRegistry, default_registry
 # ----------------------------------------------------------------------
 # AgentLoop 核心执行引擎
 # ----------------------------------------------------------------------
@@ -37,18 +38,27 @@ if str(_root_dir) not in sys.path:
 class AgentLoop:
     """
     自主 ReAct 执行循环引擎
-    调度 client、state 与 tools，完成长期自主自治任务。
+    调度 client、state 与 tools，并通过 HookManager 驱动生命周期切面 (AOP)。
     """
 
     def __init__(
         self,
         client: Optional[DashScopeClient] = None,
         registry: Optional[ToolRegistry] = None,
+        hooks: Optional[HookManager] = None,
         system_prompt: Optional[str] = None,
     ):
         self.client = client or DashScopeClient()
         self.registry = registry or default_registry
         self.system_prompt = system_prompt or self._default_system_prompt()
+
+        # 实例级 Hook 事件总线 (默认自动挂载 TrajectoryHook 轨迹插件)
+        if hooks is not None:
+            self.hooks = hooks
+        else:
+            self.hooks = HookManager()
+            runs_dir = self.registry.workdir / "runs"
+            TrajectoryHook(runs_dir=runs_dir).register_to(self.hooks)
 
     def _default_system_prompt(self) -> str:
         return (
@@ -63,24 +73,21 @@ class AgentLoop:
     async def run(self, state: AgentState) -> AgentState:
         """
         驱动 AgentState 在自主 ReAct 循环中向前流转，直至终态。
+        通过统一 trigger 接口广播生命周期切面事件。
         :param state: 内存状态机实例
         :return: 达到终态（SUCCESS / FAILED）后的状态机
         """
-        # 初始化轨迹记录器 (落盘至工作区的 runs/ 目录)
-        runs_dir = self.registry.workdir / "runs"
-        recorder = TrajectoryRecorder(run_id=state.run_id, runs_dir=runs_dir)
-
         # 1. 确保首条消息包含系统指令 (System Prompt)
         if not any(m.get("role") == "system" for m in state.messages):
             state.messages.insert(0, {"role": "system", "content": self.system_prompt})
 
-        # 提取用户初始 prompt 并记录任务启动事件
+        # 提取用户初始 prompt 并触发 UserPromptSubmit 切面
         user_prompt = ""
         for m in state.messages:
             if m.get("role") == "user":
                 user_prompt = m.get("content", "")
                 break
-        recorder.record_task_start(prompt=user_prompt, max_steps=state.max_steps)
+        await self.hooks.trigger("UserPromptSubmit", prompt=user_prompt, state=state)
 
         # 2. 核心自主循环：只要未达到终态，持续推进
         while not state.is_terminal:
@@ -89,7 +96,7 @@ class AgentLoop:
                 logger.warning(f"[CircuitBreaker] {state.last_error}")
                 break
 
-            recorder.record_step_start(state.step_count)
+            await self.hooks.trigger("StepStart", step=state.step_count, state=state)
             logger.info(f"[Loop Step {state.step_count}/{state.max_steps}] 模型推理中...")
 
             # 向大模型发起推理请求（注入可用工具 Schema）
@@ -106,23 +113,13 @@ class AgentLoop:
             # 将大模型本轮响应结构化写入状态机（累加 Token，记录 tool_calls）
             state.add_assistant_turn(response)
 
-            # 记录大模型推理事件
-            usage_dict = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-            }
-            recorder.record_llm_response(
-                content=response.content,
-                finish_reason=response.finish_reason,
-                tool_calls=response.tool_calls,
-                usage=usage_dict,
-            )
+            # 触发 LLM 响应切面
+            await self.hooks.trigger("LLMResponse", response=response, state=state)
 
             # 3. 终态判断分支 (Termination Decision)
             if not response.has_tool_calls:
                 # 模型未调用任何工具，给出了直接回答
-                # 在当前 V0 阶段：代表模型认为任务已完成，正常达标退出
+                # 在当前 V0/V1 阶段：代表模型认为任务已完成，正常达标退出
                 state.mark_success(response.content)
                 logger.success(f"[Assistant Answer]\n{response.content}")
                 break
@@ -139,6 +136,16 @@ class AgentLoop:
                     logger.warning(f"[Tool Parse Error] {tc.name} -> {error_msg}")
                     continue
 
+                # 核心拦截点：PreToolUse 权限与安全审查 (非 None 即阻断)
+                blocked_reason = await self.hooks.trigger(
+                    "PreToolUse", tool_name=tc.name, args=args, state=state
+                )
+                if blocked_reason is not None:
+                    logger.warning(f"[Tool Blocked] {tc.name} -> {blocked_reason}")
+                    # 被切面阻断时，直接回填拒绝原因，不派发物理执行
+                    state.add_tool_result(tool_call_id=tc.id, name=tc.name, result=f"Error: {blocked_reason}")
+                    continue
+
                 logger.info(f"[Tool Call] {tc.name} | args={args}")
 
                 # 本地安全沙箱派发执行并度量耗时
@@ -151,26 +158,22 @@ class AgentLoop:
                     preview += "..."
                 logger.debug(f"[Tool Result] {tc.name} -> {preview}")
 
-                # 记录工具执行事件
-                recorder.record_tool_execution(
-                    tool_call_id=tc.id,
+                # 触发 PostToolUse 切面（耗时、落盘、脱敏）
+                await self.hooks.trigger(
+                    "PostToolUse",
                     tool_name=tc.name,
                     args=args,
                     output=output,
                     duration_ms=tool_duration_ms,
+                    tool_call_id=tc.id,
+                    state=state,
                 )
 
                 # 将物理结果以标准 role: "tool" 绑定唯一 tool_call_id 回填
                 state.add_tool_result(tool_call_id=tc.id, name=tc.name, result=output)
 
-        # 记录任务终态事件
-        recorder.record_task_end(
-            status=state.status.value,
-            total_steps=state.step_count,
-            total_tokens=state.total_tokens,
-            final_answer=state.final_answer,
-            error=state.last_error,
-        )
+        # 触发 Stop 终态切面 (通知全部 Hook 做终态归档)
+        await self.hooks.trigger("Stop", state=state)
 
         return state
 

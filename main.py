@@ -28,8 +28,8 @@ except ImportError:
     pass
 
 from client import DashScopeClient
-from runtime.loop import AgentLoop
-from runtime.state import AgentState, AgentStatus
+from runtime import AgentLoop, AgentState, AgentStatus, HookManager, TrajectoryHook
+from security import PermissionHook
 from tools.registry import ToolRegistry
 
 
@@ -37,7 +37,7 @@ def print_banner():
     banner = (
         "\n" + "=" * 68 + "\n"
         "  triumph-agent v0.1 (Mini Coding Agent Runtime)\n"
-        "  基于阿里云百炼原生协议 + 显式状态机 + loguru 结构化可观测性构建\n"
+        "  基于阿里云百炼原生协议 + 显式状态机 + 工业级权限切面 + loguru 观测性构建\n"
         + "=" * 68 + "\n"
         "提示: 输入任务指令（如：“查看当前目录下的文件并统计数量”），按回车执行。\n"
         "提示: 输入 q 或 exit 退出程序。\n"
@@ -52,7 +52,13 @@ async def main():
     workdir = Path.cwd()
     async with DashScopeClient() as client:
         registry = ToolRegistry(workdir=workdir)
-        loop_engine = AgentLoop(client=client, registry=registry)
+
+        # 显式初始化生命周期钩子总线并挂载切面插件 (统一插件装配协议)
+        hooks = HookManager()
+        hooks.register_plugin(TrajectoryHook(runs_dir=workdir / "runs"))
+        hooks.register_plugin(PermissionHook(workdir=workdir, interactive=True))
+
+        loop_engine = AgentLoop(client=client, registry=registry, hooks=hooks)
 
         # 外层会话循环 (Outer Loop)
         while True:
