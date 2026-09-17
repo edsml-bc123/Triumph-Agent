@@ -89,6 +89,17 @@ def test_permission_ask_non_interactive_fallback(sandbox_env):
     assert err is not None
     assert "Permission Denied" in err
 
+    # 3. 验证 echo > file 重定向写操作被识别为 ASK
+    act, reason = engine.evaluate("bash", {"command": 'echo "hello" > demo.txt'})
+    assert act == PermissionAction.ASK
+    err = engine.check("bash", {"command": 'echo "hello" > demo.txt'})
+    assert err is not None
+    assert "Permission Denied" in err
+
+    # 4. 验证向 /dev/null 丢弃输出被允许 (AUTO)
+    act, _ = engine.evaluate("bash", {"command": "python script.py > /dev/null 2>&1"})
+    assert act == PermissionAction.AUTO
+
 
 @pytest.mark.asyncio
 async def test_permission_hook_integration(sandbox_env):

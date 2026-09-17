@@ -59,6 +59,7 @@ class PermissionHook:
         r"\bgit\s+reset\s+--hard\b",                            # 丢弃代码改动
         r"\bgit\s+clean\s+-[fF]",                               # 强力清理未跟踪文件
         r">\s*/(?:etc|bin|sbin|usr|var)",                       # 重定向覆写系统目录
+        r"(?:^|[^<>&|])\s*>{1,2}\s*(?!/dev/null\b)[^\s>&|]+",  # 重定向写/追加文件 (防 bash echo > file 绕过)
     ]
 
     # 3. 敏感文件保护黑名单 (严禁直接访问)
