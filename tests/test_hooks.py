@@ -99,3 +99,46 @@ async def test_hooks_register_plugin():
 
     with pytest.raises(TypeError):
         manager.register_plugin(InvalidPlugin())
+
+
+@pytest.mark.asyncio
+async def test_loop_pre_tool_use_terminal_guard(tmp_path):
+    """验证 PreToolUse 切面将状态置为终态时，AgentLoop 立即中止且不执行工具"""
+    from client import LLMResponse, ToolCall
+    from runtime.loop import AgentLoop
+    from runtime.state import AgentState, AgentStatus
+    from tools.registry import ToolRegistry
+
+    class MockClient:
+        async def chat_completion(self, *args, **kwargs):
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCall(
+                        id="c1",
+                        name="write_file",
+                        arguments_raw='{"path": "never.txt", "content": "blocked"}',
+                    )
+                ],
+            )
+
+    manager = HookManager()
+
+    # 注册一个在 PreToolUse 阶段直接熔断状态机的钩子
+    @manager.on("PreToolUse")
+    async def fatal_guard(tool_name, args, state, **kwargs):
+        state.mark_failed("致命安全违规，紧急下线")
+
+    registry = ToolRegistry(workdir=tmp_path)
+    loop_engine = AgentLoop(client=MockClient(), registry=registry, hooks=manager)
+
+    state = AgentState()
+    state.add_user_message("触发致命违规测试")
+
+    final_state = await loop_engine.run(state)
+    assert final_state.is_terminal is True
+    assert final_state.status == AgentStatus.FAILED
+    assert "致命安全违规" in final_state.last_error
+    assert not (tmp_path / "never.txt").exists()
+

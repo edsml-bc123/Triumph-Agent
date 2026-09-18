@@ -81,3 +81,32 @@ def test_state_terminal_transitions():
     assert state_fail.status == AgentStatus.FAILED
     assert state_fail.is_terminal is True
     assert state_fail.last_error == "网络超时中断"
+
+
+def test_terminal_state_immutability():
+    """验证终态单向流转法则：一旦进入终态，严禁被任何业务方法复活或篡改"""
+    state = AgentState()
+    state.mark_failed("预算超标熔断")
+    assert state.is_terminal is True
+    assert state.status == AgentStatus.FAILED
+
+    # 1. 回填工具结果不能将 FAILED 复活为 RUNNING
+    state.add_tool_result(tool_call_id="call_999", name="read_file", result="some content")
+    assert state.status == AgentStatus.FAILED
+    assert state.is_terminal is True
+    # 消息依旧正常追加以保证协议完整性
+    assert state.messages[-1]["role"] == "tool"
+
+    # 2. mark_success 不能强行覆盖 FAILED
+    state.mark_success("篡改的成功结果")
+    assert state.status == AgentStatus.FAILED
+    assert state.final_answer is None
+
+    # 3. 反向保护：SUCCESS 同样是终态，不能被 mark_failed 覆写
+    ok_state = AgentState()
+    ok_state.mark_success("已成功")
+    assert ok_state.is_terminal is True
+    ok_state.mark_failed("尝试失败覆盖")
+    assert ok_state.status == AgentStatus.SUCCESS
+    assert ok_state.final_answer == "已成功"
+

@@ -74,6 +74,7 @@ class AgentState:
     step_count: int = 0                  # 当前 ReAct 循环步数
     max_steps: int = 20                  # 单次运行最大允许执行步数（硬熔断）
     total_tokens: int = 0                # 累计消耗的 Token 数量
+    budget_warned: bool = False          # 是否已触发过 Token 预算警戒预警（单任务仅提示一次）
 
     # 异常捕获与诊断信息
     last_error: Optional[str] = None
@@ -121,9 +122,11 @@ class AgentState:
                 }
                 for tc in response.tool_calls
             ]
-            self.status = AgentStatus.TOOL_EXECUTING
+            if not self.is_terminal:
+                self.status = AgentStatus.TOOL_EXECUTING
         else:
-            self.final_answer = response.content
+            if not self.is_terminal:
+                self.final_answer = response.content
 
         self.messages.append(assistant_msg)
 
@@ -139,8 +142,9 @@ class AgentState:
             "content": str(result),
         }
         self.messages.append(tool_msg)
-        # 工具执行完回填后，状态切回 RUNNING，等待大模型下一轮思考
-        self.status = AgentStatus.RUNNING
+        # 终态单向流转守卫：若已经处于终态（如切面熔断），严禁将其复活为 RUNNING
+        if not self.is_terminal:
+            self.status = AgentStatus.RUNNING
 
     def increment_step(self) -> bool:
         """
@@ -161,6 +165,9 @@ class AgentState:
         追加一条提示给大模型，要求其继续提供铁证。
         :return: True 表示允许继续重试；False 表示连续拦截次数超限，触发熔断
         """
+        if self.is_terminal:
+            return False
+
         self.consecutive_blocks += 1
         self.status = AgentStatus.BLOCKED
 
@@ -184,13 +191,17 @@ class AgentState:
         return True
 
     def mark_success(self, final_text: Optional[str] = None) -> None:
-        """将状态标记为成功终态"""
+        """将状态标记为成功终态（终态单向流转，已处于失败等终态时不可覆盖）"""
+        if self.is_terminal:
+            return
         self.status = AgentStatus.SUCCESS
         if final_text is not None:
             self.final_answer = final_text
 
     def mark_failed(self, error_msg: str) -> None:
-        """将状态标记为失败终态并记录错误"""
+        """将状态标记为失败终态并记录错误（已处于终态时保持终态不可逆）"""
+        if self.status == AgentStatus.SUCCESS:
+            return
         self.status = AgentStatus.FAILED
         self.last_error = error_msg
 

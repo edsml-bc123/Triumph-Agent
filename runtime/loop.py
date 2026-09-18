@@ -88,6 +88,10 @@ class AgentLoop:
                 user_prompt = m.get("content", "")
                 break
         await self.hooks.trigger("UserPromptSubmit", prompt=user_prompt, state=state)
+        if state.is_terminal:
+            logger.warning(f"[CircuitBreaker] 任务提交切面触发终态: {state.last_error}")
+            await self.hooks.trigger("Stop", state=state)
+            return state
 
         # 2. 核心自主循环：只要未达到终态，持续推进
         while not state.is_terminal:
@@ -97,6 +101,10 @@ class AgentLoop:
                 break
 
             await self.hooks.trigger("StepStart", step=state.step_count, state=state)
+            if state.is_terminal:
+                logger.warning(f"[CircuitBreaker] 轮次启动切面阻断执行: {state.last_error}")
+                break
+
             logger.info(f"[Loop Step {state.step_count}/{state.max_steps}] 模型推理中...")
 
             # 向大模型发起推理请求（注入可用工具 Schema）
@@ -115,17 +123,26 @@ class AgentLoop:
 
             # 触发 LLM 响应切面
             await self.hooks.trigger("LLMResponse", response=response, state=state)
+            if state.is_terminal:
+                logger.warning(f"[CircuitBreaker] LLM 响应后切面触发熔断: {state.last_error}")
+                break
 
             # 3. 终态判断分支 (Termination Decision)
             if not response.has_tool_calls:
                 # 模型未调用任何工具，给出了直接回答
-                # 在当前 V0/V1 阶段：代表模型认为任务已完成，正常达标退出
-                state.mark_success(response.content)
+                # 仅在未处于失败等终态的前提下，正常达标退出并记录为 SUCCESS
+                if not state.is_terminal:
+                    state.mark_success(response.content)
                 logger.success(f"[Assistant Answer]\n{response.content}")
                 break
 
             # 4. 批量工具派发与协议闭环执行 (Batch Tool Execution)
             for tc in response.tool_calls:
+                # 物理执行前置门禁：若前序工具调用已触发终态，终止后续派发
+                if state.is_terminal:
+                    logger.warning(f"[CircuitBreaker] 批处理工具执行被阻断，终止后续派发: {state.last_error}")
+                    break
+
                 # 安全反序列化参数（内置 json_repair 容错）
                 try:
                     args = tc.parse_arguments()
@@ -140,6 +157,10 @@ class AgentLoop:
                 blocked_reason = await self.hooks.trigger(
                     "PreToolUse", tool_name=tc.name, args=args, state=state
                 )
+                if state.is_terminal:
+                    logger.warning(f"[CircuitBreaker] PreToolUse 切面触发终态熔断: {state.last_error}")
+                    break
+
                 if blocked_reason is not None:
                     logger.warning(f"[Tool Blocked] {tc.name} -> {blocked_reason}")
                     # 被切面阻断时，直接回填拒绝原因，不派发物理执行
@@ -168,6 +189,9 @@ class AgentLoop:
                     tool_call_id=tc.id,
                     state=state,
                 )
+                if state.is_terminal:
+                    logger.warning(f"[CircuitBreaker] PostToolUse 切面触发终态熔断: {state.last_error}")
+                    break
 
                 # 将物理结果以标准 role: "tool" 绑定唯一 tool_call_id 回填
                 state.add_tool_result(tool_call_id=tc.id, name=tc.name, result=output)
