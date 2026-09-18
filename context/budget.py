@@ -116,7 +116,7 @@ async def _smoke_test():
     state.total_tokens = 850
     await hook.on_llm_response(LLMResponse(content="ok", finish_reason="stop"), state)
     assert not state.is_terminal
-    assert state.run_id in hook._warned_runs
+    assert state.budget_warned is True
     print("2. 达到 80% 警戒线预警通过 (850/1000)")
 
     # 3. 模拟触碰硬上限熔断 (消耗 1050 Token)

@@ -199,8 +199,8 @@ class AgentState:
             self.final_answer = final_text
 
     def mark_failed(self, error_msg: str) -> None:
-        """将状态标记为失败终态并记录错误（已处于终态时保持终态不可逆）"""
-        if self.status == AgentStatus.SUCCESS:
+        """将状态标记为失败终态并记录错误（已处于任意终态时均不可逆）"""
+        if self.is_terminal:
             return
         self.status = AgentStatus.FAILED
         self.last_error = error_msg

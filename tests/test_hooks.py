@@ -142,3 +142,72 @@ async def test_loop_pre_tool_use_terminal_guard(tmp_path):
     assert "致命安全违规" in final_state.last_error
     assert not (tmp_path / "never.txt").exists()
 
+
+@pytest.mark.asyncio
+async def test_loop_crash_guarantees_stop_and_task_end(tmp_path):
+    """
+    验证系统级未捕获异常发生时：
+    1. 异常不被静默吞掉，正常向上 raise；
+    2. state 被置为 FAILED 终态；
+    3. finally 块绝对保障 Stop 切面被 100% 触发；
+    4. TrajectoryHook 正确闭环落盘 TaskEnd，杜绝悬空轨迹文件。
+    """
+    import json
+    from runtime.event import TrajectoryHook
+    from runtime.loop import AgentLoop
+    from runtime.state import AgentState, AgentStatus
+    from tools.registry import ToolRegistry
+
+    class DummyClient:
+        async def chat_completion(self, *args, **kwargs):
+            raise NotImplementedError("不应执行到模型调用阶段")
+
+    manager = HookManager()
+    runs_dir = tmp_path / "runs"
+    traj_hook = TrajectoryHook(runs_dir=runs_dir)
+    manager.register_plugin(traj_hook)
+
+    stop_called = False
+
+    @manager.on("Stop")
+    async def track_stop(state, **kwargs):
+        nonlocal stop_called
+        stop_called = True
+
+    # 模拟在 StepStart 切面发生未被捕获的严重系统级异常
+    @manager.on("StepStart")
+    async def buggy_plugin(step, **kwargs):
+        raise RuntimeError("第三方插件或底层运行时发生未捕获致命异常！")
+
+    registry = ToolRegistry(workdir=tmp_path)
+    loop_engine = AgentLoop(client=DummyClient(), registry=registry, hooks=manager)
+
+    state = AgentState()
+    state.add_user_message("测试循环崩溃守护")
+
+    # 1. 验证异常向上传递，不被静默吞掉
+    with pytest.raises(RuntimeError, match="第三方插件或底层运行时发生未捕获致命异常！"):
+        await loop_engine.run(state)
+
+    # 2. 验证状态机被标记为 FAILED，且包含根本原因信息
+    assert state.is_terminal is True
+    assert state.status == AgentStatus.FAILED
+    assert "执行循环崩溃中断" in state.last_error
+    assert "未捕获致命异常" in state.last_error
+
+    # 3. 验证 Stop 钩子被 100% 触发
+    assert stop_called is True
+
+    # 4. 验证黑匣子轨迹文件是否完整闭环且含有 TaskEnd
+    run_file = runs_dir / f"{state.run_id}.jsonl"
+    assert run_file.exists()
+    lines = [json.loads(line) for line in run_file.read_text(encoding="utf-8").strip().splitlines()]
+    assert len(lines) >= 2
+    assert lines[0]["event_type"] == "TaskStart"
+    
+    # 核心契约：即使因崩溃抛出异常，最后一条日志也必须是 TaskEnd
+    last_event = lines[-1]
+    assert last_event["event_type"] == "TaskEnd"
+    assert last_event["data"]["status"] == "failed"
+    assert "执行循环崩溃中断" in last_event["data"]["error"]
+
