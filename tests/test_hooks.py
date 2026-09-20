@@ -199,7 +199,7 @@ async def test_loop_crash_guarantees_stop_and_task_end(tmp_path):
     assert stop_called is True
 
     # 4. 验证黑匣子轨迹文件是否完整闭环且含有 TaskEnd
-    run_file = runs_dir / f"{state.run_id}.jsonl"
+    run_file = runs_dir.resolve() / state.run_id / "trajectory.jsonl"
     assert run_file.exists()
     lines = [json.loads(line) for line in run_file.read_text(encoding="utf-8").strip().splitlines()]
     assert len(lines) >= 2

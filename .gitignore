@@ -38,3 +38,9 @@ runs/
 .idea/
 .vscode/
 *.swp
+
+# 测试与代码覆盖率产物
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/

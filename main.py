@@ -28,7 +28,7 @@ except ImportError:
     pass
 
 from client import DashScopeClient
-from context import BudgetHook
+from context import BudgetHook, CompactorHook, ContextCompactor, CompactionConfig
 from runtime import AgentLoop, AgentState, AgentStatus, HookManager, TrajectoryHook
 from security import PermissionHook
 from tools.registry import ToolRegistry
@@ -38,7 +38,7 @@ def print_banner():
     banner = (
         "\n" + "=" * 68 + "\n"
         "  triumph-agent v0.1 (Mini Coding Agent Runtime)\n"
-        "  基于阿里云百炼原生协议 + 显式状态机 + 工业级权限切面 + 预算硬熔断构建\n"
+        "  基于阿里云百炼原生协议 + 显式状态机 + 权限审计 + 预算熔断 + 渐进式压缩\n"
         + "=" * 68 + "\n"
         "提示: 输入任务指令（如：“查看当前目录下的文件并统计数量”），按回车执行。\n"
         "提示: 输入 q 或 exit 退出程序。\n"
@@ -55,10 +55,27 @@ async def main():
         registry = ToolRegistry(workdir=workdir)
 
         # 显式初始化生命周期钩子总线并挂载切面插件 (统一插件装配协议)
+        # 工业级生产梯度参数：
+        # - L1: 单工具输出 >25,000 字符 (约 6k tokens) 自动落盘截断并生成 1500 字符预览
+        # - L2: 对话历史 >40 条消息自动执行中段成对归档
+        # - L3/L4: 上下文 >80,000 字符 (约 20k tokens) 触发陈旧工具微压缩与弹性拟合
+        # - L5: 上下文 >140,000 字符 (约 35k tokens) 触发终极全局语义摘要折叠
+        # - 预算硬上限设为 100,000 tokens
+        compactor_cfg = CompactionConfig(
+            max_single_tool_output_chars=25_000,
+            preview_chars=1500,
+            max_history_messages=40,
+            keep_recent_tool_results=3,
+            soft_threshold_chars=80_000,
+            hard_threshold_chars=140_000,
+        )
+        compactor = ContextCompactor(workdir=workdir, config=compactor_cfg)
+
         hooks = HookManager()
         hooks.register_plugin(TrajectoryHook(runs_dir=workdir / "runs"))
         hooks.register_plugin(PermissionHook(workdir=workdir, interactive=True))
-        hooks.register_plugin(BudgetHook(max_total_tokens=10000))
+        hooks.register_plugin(BudgetHook(max_total_tokens=100000))
+        hooks.register_plugin(CompactorHook(compactor=compactor, client=client))
 
         loop_engine = AgentLoop(client=client, registry=registry, hooks=hooks)
 
@@ -80,6 +97,7 @@ async def main():
             # 为当前任务初始化独立的 AgentState
             state = AgentState(max_steps=20)
             state.add_user_message(user_input)
+            state.current_goal = user_input
 
             logger.info("启动自主执行任务 | Run ID: {}", state.run_id)
             start_time = asyncio.get_event_loop().time()

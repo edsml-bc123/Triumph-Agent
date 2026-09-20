@@ -68,7 +68,7 @@ async def test_trajectory_hook_integration():
         state.mark_success("任务完成")
         await hooks.trigger("Stop", state=state)
 
-        record_file = runs_dir / "hook_record_001.jsonl"
+        record_file = runs_dir.resolve() / "hook_record_001" / "trajectory.jsonl"
         assert record_file.exists()
         lines = record_file.read_text(encoding="utf-8").strip().splitlines()
         assert len(lines) == 4

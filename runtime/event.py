@@ -61,9 +61,11 @@ class TrajectoryRecorder:
 
     def __init__(self, run_id: str, runs_dir: Optional[Path] = None):
         self.run_id = run_id
-        self.runs_dir = (runs_dir or (Path.cwd() / "runs")).resolve()
-        self.runs_dir.mkdir(parents=True, exist_ok=True)
-        self.file_path = self.runs_dir / f"{run_id}.jsonl"
+        base_runs_dir = (runs_dir or (Path.cwd() / "runs")).resolve()
+        # 方案 A：轨迹文件与压缩产物共同落入 runs/{run_id}/ 专属子目录中
+        self.run_dir = base_runs_dir / run_id
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.file_path = self.run_dir / "trajectory.jsonl"
 
     def record(self, event: str, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
         """
@@ -186,6 +188,7 @@ def _smoke_test():
         recorder.record("TaskEnd", status="success", total_steps=1, total_tokens=100, final_answer="完成")
 
         assert recorder.file_path.exists()
+        assert recorder.file_path == Path(tmpdir).resolve() / "test_run_001" / "trajectory.jsonl"
         lines = recorder.file_path.read_text(encoding="utf-8").strip().splitlines()
         assert len(lines) == 4
         first_event = json.loads(lines[0])
