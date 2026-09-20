@@ -82,9 +82,9 @@ class AgentLoop:
             state.messages.insert(0, {"role": "system", "content": self.system_prompt})
 
         try:
-            # 提取用户初始 prompt 并触发 UserPromptSubmit 切面
+            # 提取用户当前最新 prompt 并触发 UserPromptSubmit 切面
             user_prompt = ""
-            for m in state.messages:
+            for m in reversed(state.messages):
                 if m.get("role") == "user":
                     user_prompt = m.get("content", "")
                     break

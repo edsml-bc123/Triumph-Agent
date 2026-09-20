@@ -29,6 +29,7 @@ except ImportError:
 
 from client import DashScopeClient
 from context import BudgetHook, CompactorHook, ContextCompactor, CompactionConfig
+from memory import MemoryHook, MemoryManager
 from runtime import AgentLoop, AgentState, AgentStatus, HookManager, TrajectoryHook
 from security import PermissionHook
 from tools.registry import ToolRegistry
@@ -37,10 +38,12 @@ from tools.registry import ToolRegistry
 def print_banner():
     banner = (
         "\n" + "=" * 68 + "\n"
-        "  triumph-agent v0.1 (Mini Coding Agent Runtime)\n"
-        "  基于阿里云百炼原生协议 + 显式状态机 + 权限审计 + 预算熔断 + 渐进式压缩\n"
+        "  triumph-agent v0.2 (Mini Coding Agent Runtime)\n"
+        "  基于阿里云百炼原生协议 + 显式状态机 + 权限审计 + 预算熔断 + 渐进式压缩 + 三层记忆\n"
         + "=" * 68 + "\n"
         "提示: 输入任务指令（如：“查看当前目录下的文件并统计数量”），按回车执行。\n"
+        "提示: 输入 /clear 或 clear 可重置当前会话历史。\n"
+        "提示: 输入 /memory 或 memory 可查看当前长期记忆索引。\n"
         "提示: 输入 q 或 exit 退出程序。\n"
     )
     print(banner)
@@ -56,30 +59,34 @@ async def main():
 
         # 显式初始化生命周期钩子总线并挂载切面插件 (统一插件装配协议)
         # 工业级生产梯度参数：
-        # - L1: 单工具输出 >25,000 字符 (约 6k tokens) 自动落盘截断并生成 1500 字符预览
-        # - L2: 对话历史 >40 条消息自动执行中段成对归档
-        # - L3/L4: 上下文 >80,000 字符 (约 20k tokens) 触发陈旧工具微压缩与弹性拟合
-        # - L5: 上下文 >140,000 字符 (约 35k tokens) 触发终极全局语义摘要折叠
-        # - 预算硬上限设为 100,000 tokens
+        # - L1: 单工具输出 >20,000 字符自动落盘截断并保留 1200 字符预览
+        # - L2: 对话历史 >30 条消息自动执行中段成对归档
+        # - L3/L4: 上下文 >35,000 字符（约 10k tokens）触发陈旧工具微压缩与弹性拟合，更早削减 Token 膨胀
+        # - L5: 上下文 >80,000 字符触发终极全局语义摘要折叠
+        # - 复杂任务预算硬上限放宽至 250,000 tokens
         compactor_cfg = CompactionConfig(
-            max_single_tool_output_chars=25_000,
-            preview_chars=1500,
-            max_history_messages=40,
-            keep_recent_tool_results=3,
-            soft_threshold_chars=80_000,
-            hard_threshold_chars=140_000,
+            max_single_tool_output_chars=20_000,
+            preview_chars=1200,
+            max_history_messages=30,
+            keep_recent_tool_results=2,
+            soft_threshold_chars=35_000,
+            hard_threshold_chars=80_000,
         )
         compactor = ContextCompactor(workdir=workdir, config=compactor_cfg)
+        memory_mgr = MemoryManager(workdir=workdir)
 
         hooks = HookManager()
         hooks.register_plugin(TrajectoryHook(runs_dir=workdir / "runs"))
         hooks.register_plugin(PermissionHook(workdir=workdir, interactive=True))
-        hooks.register_plugin(BudgetHook(max_total_tokens=100000))
+        hooks.register_plugin(BudgetHook(max_total_tokens=250000))
         hooks.register_plugin(CompactorHook(compactor=compactor, client=client))
+        hooks.register_plugin(MemoryHook(manager=memory_mgr, client=client))
 
         loop_engine = AgentLoop(client=client, registry=registry, hooks=hooks)
 
-        # 外层会话循环 (Outer Loop)
+        # 外层会话循环 (Outer Loop) - 维护连续的多轮会话历史 (Session Context)
+        session_messages: list[dict] = []
+
         while True:
             try:
                 user_input = input("\ntriumph >> ").strip()
@@ -94,12 +101,27 @@ async def main():
                 logger.info("用户主动退出，再见！")
                 break
 
-            # 为当前任务初始化独立的 AgentState
+            if user_input.lower() in ("/clear", "clear"):
+                session_messages.clear()
+                logger.info("已重置当前会话上下文，开启全新任务对话。")
+                continue
+
+            if user_input.lower() in ("/memory", "memory"):
+                index_text = memory_mgr.storage.read_index()
+                if index_text:
+                    print(f"\n[当前长期记忆目录]:\n{index_text}")
+                else:
+                    print("\n[当前长期记忆目录为空]")
+                continue
+
+            # 为当前任务初始化独立的 AgentState，并继承会话级多轮历史
             state = AgentState(max_steps=20)
+            if session_messages:
+                state.messages.extend(session_messages)
             state.add_user_message(user_input)
             state.current_goal = user_input
 
-            logger.info("启动自主执行任务 | Run ID: {}", state.run_id)
+            logger.info("启动自主执行任务 | Run ID: {} | 携带历史上下文: {} 条消息", state.run_id, len(session_messages))
             start_time = asyncio.get_event_loop().time()
 
             try:
@@ -111,13 +133,16 @@ async def main():
 
             elapsed = asyncio.get_event_loop().time() - start_time
 
-            # 结构化输出执行报告
+            # 结构化输出执行报告与会话状态延续
             if state.status == AgentStatus.SUCCESS:
+                # 成功后将本轮产生的最新上下文平滑继承至会话历史中
+                session_messages = list(state.messages)
                 logger.success(
-                    "任务执行成功 | 步数: {} | 耗时: {:.2f}s | Token开销: {}",
+                    "任务执行成功 | 步数: {} | 耗时: {:.2f}s | Token开销: {} | 当前会话上下文深度: {} 条",
                     state.step_count,
                     elapsed,
                     state.total_tokens,
+                    len(session_messages),
                 )
             else:
                 logger.error(

@@ -29,6 +29,7 @@ _root_dir = _current_dir.parent
 if str(_root_dir) not in sys.path:
     sys.path.insert(0, str(_root_dir))
 
+from client import DashScopeClient
 from runtime.state import AgentState
 
 
@@ -376,7 +377,7 @@ class ContextCompactor:
     async def semantic_compact(
         self,
         messages: List[Dict[str, Any]],
-        client: Any,
+        client: DashScopeClient,
         active_goal: str = "",
         run_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
@@ -450,7 +451,7 @@ class ContextCompactor:
     async def prepare(
         self,
         messages: List[Dict[str, Any]],
-        client: Optional[Any] = None,
+        client: Optional[DashScopeClient] = None,
         active_goal: str = "",
         run_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
@@ -503,7 +504,7 @@ class CompactorHook:
     3. 严格捍卫协议成对契约，确保大模型发出的请求永远合法安全。
     """
 
-    def __init__(self, compactor: Optional[ContextCompactor] = None, client: Optional[Any] = None):
+    def __init__(self, compactor: Optional[ContextCompactor] = None, client: Optional[DashScopeClient] = None):
         self.compactor = compactor or ContextCompactor()
         self.client = client
 

@@ -111,7 +111,7 @@ class DashScopeClient:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         default_model: Optional[str] = None,
-        timeout: float = 60.0,
+        timeout: float = 180.0,
         connect_timeout: float = 15.0,
     ):
         self.api_key = (api_key or os.getenv("ALIBABACLOUD_API_KEY") or "").strip()
@@ -200,7 +200,8 @@ class DashScopeClient:
         try:
             response = await client.post(self.completions_url, json=payload, headers=headers)
         except httpx.RequestError as exc:
-            raise LLMAPIError(f"百炼 API 网络请求异常: {exc}") from exc
+            err_detail = str(exc).strip() or "读取超时 (ReadTimeout) 或对端连接断开"
+            raise LLMAPIError(f"百炼 API 网络请求异常 [{type(exc).__name__}]: {err_detail}") from exc
 
         if response.status_code != 200:
             raise LLMAPIError(
