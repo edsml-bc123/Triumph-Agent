@@ -93,11 +93,11 @@ async def test_hooks_register_plugin():
     await manager.trigger("Stop")
     assert plugin.triggered is True
 
-    # 验证非法插件未实现协议时抛出 TypeError
+    # 验证非法插件未实现协议契约时触发标准 AttributeError
     class InvalidPlugin:
         pass
 
-    with pytest.raises(TypeError):
+    with pytest.raises(AttributeError):
         manager.register_plugin(InvalidPlugin())
 
 

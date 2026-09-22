@@ -13,7 +13,19 @@ triumph-agent 生命周期钩子调度引擎 (Unified Hook Manager)
 """
 
 import inspect
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class HookPlugin(Protocol):
+    """
+    生命周期切面插件装配协议 (PEP 544 Protocol)
+    所有扩展插件（如 TrajectoryHook, PermissionHook, MemoryHook 等）必须满足此契约。
+    """
+
+    def register_to(self, manager: "HookManager") -> None:
+        """向 HookManager 统一注册生命周期回调钩子"""
+        ...
 
 
 class HookManager:
@@ -51,15 +63,12 @@ class HookManager:
             return callback
         return decorator
 
-    def register_plugin(self, plugin: Any) -> None:
+    def register_plugin(self, plugin: HookPlugin) -> None:
         """
         统一插件化装配 (Plugin Architecture)：
-        挂载实现了 register_to(manager) 契约的复合切面插件。
+        挂载遵循 HookPlugin 契约规范的切面插件。
         """
-        if hasattr(plugin, "register_to") and callable(plugin.register_to):
-            plugin.register_to(self)
-        else:
-            raise TypeError(f"插件 {plugin} 必须实现 'register_to(manager)' 方法以供挂载")
+        plugin.register_to(self)
 
     async def trigger(self, event: str, *args: Any, **kwargs: Any) -> Any:
         """

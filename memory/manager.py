@@ -3,7 +3,7 @@ triumph-agent 记忆调度与管线管理器 (Memory Manager)
 ===================================================
 对标 learn-claude-code s09 算法管线：
 1. 语义召回：两阶段粗筛（模型选号）+ 关键词分词重合度降级兜底；
-2. 提取过滤：严格过滤临时性指示（TEMPORARY_MEMORY_MARKERS），防重复防伪造；
+2. 提取过滤：基于轻量裁判模型 (Flash Evaluator) 进行语义持久性裁决，抵御提示词注入与时效性污染；
 3. 快照整理：数量达到阈值触发去重合并，失败自动原子回滚；
 4. Prompt 注入：明确记忆属于背景知识，当前指令拥有最高优先级。
 """
@@ -198,8 +198,8 @@ class MemoryManager:
                         break
             if selected:
                 return selected
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[Memory Recall] LLM 记忆选号召回异常，平滑降级至关键词匹配: {e}")
 
         # 降级备用
         return self.keyword_memory_selection(records, query, self.max_recalled_records)
@@ -214,8 +214,10 @@ class MemoryManager:
         remaining = self.recall_char_limit
 
         for filename in selected_filenames:
+            if remaining <= 0:
+                break
             content = self.storage.read_memory(filename)
-            if not content or remaining <= 0:
+            if not content:
                 continue
             recalled = content[:remaining]
             loaded.append({"source": filename, "content": recalled})
@@ -372,7 +374,8 @@ class MemoryManager:
                 stored_count += 1
 
             return stored_count
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[Memory Extraction] 对话提炼记忆流程异常中断，已安全跳过: {e}")
             return 0
 
     # ------------------------------------------------------------------
@@ -409,7 +412,8 @@ class MemoryManager:
                 tools=[],
             )
             consolidated = extract_json_array(response.content)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[Memory Consolidate] 记忆合并 LLM 推理异常，跳过本次整理: {e}")
             return len(records)
 
         if not consolidated or not isinstance(consolidated, list):
@@ -453,8 +457,9 @@ class MemoryManager:
                 )
             self.storage.rebuild_index()
             return len(valid_new_records)
-        except Exception:
+        except Exception as e:
             # 出现任何 I/O 或格式异常，利用快照 100% 原样还原
+            logger.error(f"[Memory Consolidate] 写入合并记忆发生故障，触发原子快照还原: {e}")
             self.storage.restore_snapshot(snapshot)
             raise
 

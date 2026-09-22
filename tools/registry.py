@@ -15,11 +15,24 @@ triumph-agent 工具注册表与安全执行分发器 (Tool Registry)
 """
 
 import glob as g
+import inspect
 import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class ToolPlugin(Protocol):
+    """
+    复合工具插件装配协议 (PEP 544 Protocol)
+    所有需要向注册表注入工具集合的插件（如 SubAgentTool）必须满足此契约。
+    """
+
+    def register_to(self, registry: "ToolRegistry") -> None:
+        """向 ToolRegistry 统一注册工具声明与执行 Handler"""
+        ...
 
 
 class ToolRegistry:
@@ -245,17 +258,46 @@ class ToolRegistry:
         """导出提供给大模型调用的标准工具协议声明列表"""
         return self._specs
 
+    def register_plugin(self, plugin: ToolPlugin) -> None:
+        """
+        统一工具插件装配协议 (对齐 HookManager.register_plugin)：
+        挂载遵循 ToolPlugin 协议契约规范的复合工具插件。
+        """
+        plugin.register_to(self)
+
+    def fork(self, exclude: Optional[Any] = None) -> "ToolRegistry":
+        """
+        通用派生/复制工具注册表：
+        继承当前工作区沙箱与已注册工具，支持在派生时按名称排除特定工具集合。
+        :param exclude: 需要在派生副本中排除的工具名称集合 (如 {"subagent"})
+        :return: 独立隔离的 ToolRegistry 副本
+        """
+        excluded_names = set(exclude or [])
+        forked = ToolRegistry(workdir=self.workdir)
+        for spec in self._specs:
+            tool_name = spec["function"]["name"]
+            if tool_name in excluded_names:
+                continue
+            if tool_name not in forked._handlers:
+                forked.register(
+                    name=tool_name,
+                    description=spec["function"]["description"],
+                    parameters=spec["function"]["parameters"],
+                    handler=self._handlers[tool_name],
+                )
+        return forked
+
     # ------------------------------------------------------------------
     # 4. 防御性分发执行 (Defensive Dispatcher)
     # ------------------------------------------------------------------
 
-    def execute(self, name: str, args: Dict[str, Any]) -> str:
+    async def execute(self, name: str, args: Dict[str, Any]) -> str:
         """
         分发并执行工具调用，实现全方位防御性隔离：
         1. 捕获不存在的工具名 (KeyError 防御)
         2. 捕获参数解包异常 (TypeError 防御)
         3. 捕获任何运行时未知错误 (Exception 防御)
-        保证进程绝不崩溃，以自愈语义反馈模型。
+        原生支持同步与异步工具 Handler，保证进程绝不崩溃，以自愈语义反馈模型。
         """
         if name not in self._handlers:
             available = list(self._handlers.keys())
@@ -266,6 +308,8 @@ class ToolRegistry:
 
         handler = self._handlers[name]
         try:
+            if inspect.iscoroutinefunction(handler):
+                return await handler(**args)
             return handler(**args)
         except TypeError as e:
             return (

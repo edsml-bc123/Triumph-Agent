@@ -29,7 +29,7 @@ from loguru import logger
 from client import DashScopeClient
 from runtime.event import TrajectoryHook
 from runtime.hooks import HookManager
-from runtime.state import AgentState, AgentStatus
+from runtime.state import AgentState, AgentStatus, current_run_id_var
 from tools.registry import ToolRegistry, default_registry
 # ----------------------------------------------------------------------
 # AgentLoop 核心执行引擎
@@ -80,6 +80,9 @@ class AgentLoop:
         # 1. 确保首条消息包含系统指令 (System Prompt)
         if not any(m.get("role") == "system" for m in state.messages):
             state.messages.insert(0, {"role": "system", "content": self.system_prompt})
+
+        # 绑定当前异步协程级任务 ID 上下文 (Ambient Context)
+        token = current_run_id_var.set(state.run_id)
 
         try:
             # 提取用户当前最新 prompt 并触发 UserPromptSubmit 切面
@@ -171,7 +174,7 @@ class AgentLoop:
 
                     # 本地安全沙箱派发执行并度量耗时
                     tool_start = time.time()
-                    output = self.registry.execute(tc.name, args)
+                    output = await self.registry.execute(tc.name, args)
                     tool_duration_ms = (time.time() - tool_start) * 1000
 
                     preview = output[:200].replace("\n", " ")
@@ -202,9 +205,11 @@ class AgentLoop:
             logger.error(f"[Runtime Crash] {state.last_error}")
             raise
         finally:
-            # 借鉴 learn-claude-code s16 闭环思想 (failed / stopped close the loop too)
-            # 无论正常退出、切面熔断还是致命崩溃，100% 触发 Stop 终态切面，确保黑匣子 TaskEnd 必然落盘
-            await self.hooks.trigger("Stop", state=state)
+            try:
+                # 无论正常退出、切面熔断还是致命崩溃，100% 触发 Stop 终态切面，确保黑匣子 TaskEnd 必然落盘
+                await self.hooks.trigger("Stop", state=state)
+            finally:
+                current_run_id_var.reset(token)
 
         return state
 

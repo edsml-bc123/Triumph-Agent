@@ -408,3 +408,63 @@ def test_session_multi_turn_continuation():
     assert state2.messages[2]["role"] == "user"
     assert "动态规划" in state2.messages[2]["content"]
 
+
+# ----------------------------------------------------------------------
+# 6. 工业级可靠性加固专项测试 (原子写、Slug消歧、坏文件容错)
+# ----------------------------------------------------------------------
+
+def test_storage_slug_collision_disambiguation(tmp_path):
+    """验证同名 slug 自动添加递增后缀消歧，避免无声覆盖"""
+    storage = MemoryStorage(workdir=tmp_path)
+
+    # 1. 写入 "My Mind" -> my-mind.md
+    p1 = storage.write_memory("My Mind", "project", "First project memory", "Content 1")
+    assert p1.name == "my-mind.md"
+
+    # 2. 再次写入相同名字 "My Mind" -> 幂等更新同一个文件
+    p1_update = storage.write_memory("My Mind", "project", "Updated first memory", "Content 1 updated")
+    assert p1_update.name == "my-mind.md"
+    assert "Content 1 updated" in p1_update.read_text(encoding="utf-8")
+
+    # 3. 写入不同名字但 slug 冲突的 "My-Mind" -> 自动分配 my-mind-2.md
+    p3 = storage.write_memory("My-Mind", "project", "Another capitalized memory", "Content 3")
+    assert p3.name == "my-mind-2.md"
+
+    # 验证两个文件互不覆盖且各自存在
+    assert p1.exists()
+    assert p3.exists()
+    assert len(storage.list_memories()) == 2
+
+
+def test_storage_atomic_write_and_no_tmp_residue(tmp_path):
+    """验证原子写入成功且无临时文件残留"""
+    storage = MemoryStorage(workdir=tmp_path)
+    path = storage.write_memory("Atomic Test", "project", "Desc", "Body text")
+    assert path.exists()
+    assert path.read_text(encoding="utf-8") != ""
+
+    # 验证没有遗留的 .tmp 隐藏临时文件
+    tmp_files = list(storage.memory_dir.glob("*.tmp"))
+    assert len(tmp_files) == 0
+
+
+def test_storage_fault_tolerance_on_corrupt_files(tmp_path):
+    """验证存在损坏/乱码文件时，list_memories 与 rebuild_index 能够安全跳过而不崩溃"""
+    storage = MemoryStorage(workdir=tmp_path)
+    storage.write_memory("Valid Memory", "project", "Good desc", "Good body")
+
+    # 人工在 .memory 目录下塞入一个完全损坏的二进制乱码文件 (引发 UnicodeDecodeError)
+    corrupt_file = storage.memory_dir / "corrupted.md"
+    corrupt_file.write_bytes(b"\x80\x81\xff\xfe\xaa\xbb")
+
+    # 验证 list_memories 不会崩溃，且能正常加载好文件
+    records = storage.list_memories()
+    assert len(records) == 1
+    assert records[0].name == "Valid Memory"
+
+    # 验证 rebuild_index 也能正常跳过坏文件，索引文件生成正确
+    storage.rebuild_index()
+    index_content = storage.read_index()
+    assert "Valid Memory" in index_content
+    assert "corrupted" not in index_content
+

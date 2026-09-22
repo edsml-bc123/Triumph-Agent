@@ -15,10 +15,14 @@ triumph-agent 状态机与上下文模型 (State Contract)
 
 import sys
 import uuid
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# 异步协程级当前运行任务 ID 上下文变量 (Ambient Run Context，用于跨层透传与树状派生溯源)
+current_run_id_var: ContextVar[Optional[str]] = ContextVar("current_run_id", default=None)
 
 # 确保当前项目根目录在 sys.path 中，便于直接调用 client 模块
 _current_dir = Path(__file__).resolve().parent
@@ -65,6 +69,7 @@ class AgentState:
     run_id: str = field(
         default_factory=lambda: f"run_{datetime.now(CST).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     )
+    parent_run_id: Optional[str] = None  # 父级运行标识（若由 Subagent 派生则关联父任务，根任务为 None）
     status: AgentStatus = AgentStatus.PENDING
 
     # 消息上下文流 (严格遵循 OpenAI / 百炼格式)

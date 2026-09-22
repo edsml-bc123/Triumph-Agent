@@ -40,6 +40,12 @@ def test_permission_auto_actions(sandbox_env):
     act, reason = engine.evaluate("bash", {"command": "ls -la"})
     assert act == PermissionAction.AUTO
 
+    # 4. 受控工具与新扩展工具 (如 subagent、自定义插件等) 开放式自动放行
+    act_subagent, _ = engine.evaluate("subagent", {"prompt": "深入分析模块"})
+    assert act_subagent == PermissionAction.AUTO
+    act_custom, _ = engine.evaluate("calculator", {"expr": "1 + 1"})
+    assert act_custom == PermissionAction.AUTO
+
 
 def test_permission_deny_security_boundary(sandbox_env):
     """验证安全边界与一票否决 (DENY)"""

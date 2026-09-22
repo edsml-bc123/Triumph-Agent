@@ -33,6 +33,9 @@ ENV/
 runs/
 *.log
 
+# 长期记忆本地沉淀目录
+.memory/
+
 # IDE 与操作系统元数据
 .DS_Store
 .idea/

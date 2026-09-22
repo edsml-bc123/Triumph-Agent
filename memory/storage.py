@@ -8,10 +8,14 @@ triumph-agent 记忆持久化存储引擎 (Memory Storage)
 4. 原子事务：快照捕获与灾难回滚，保证整理过程崩溃时 100% 还原。
 """
 
+import asyncio
+import os
 import re
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import yaml
+from loguru import logger
 
 from memory.models import MemoryRecord, MemoryType
 
@@ -64,6 +68,26 @@ class MemoryStorage:
     def __init__(self, workdir: Path, memory_dir: Optional[Path] = None):
         self.workdir = Path(workdir).resolve()
         self.memory_dir = (memory_dir or (self.workdir / ".memory")).resolve()
+        self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _atomic_write_text(path: Path, content: str) -> None:
+        """
+        POSIX 标准原子写入：
+        先写入同目录下的隐式临时文件，再通过 os.replace 进行原子重命名替换。
+        彻底规避进程崩溃导致的文件截断损坏，以及并发读取到未完成的半截内容。
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex[:6]}.tmp")
+        try:
+            tmp_path.write_text(content, encoding="utf-8")
+            os.replace(tmp_path, path)
+        finally:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
 
     def resolve_path(self, filename: str, allow_index: bool = False) -> Path:
         """
@@ -87,7 +111,7 @@ class MemoryStorage:
 
     def write_memory(self, name: str, mem_type: MemoryType | str, description: str, body: str) -> Path:
         """
-        写入或覆盖单条记忆文件，并触发全局索引重建
+        写入或更新单条记忆文件，支持 Slug 冲突智能消歧，并通过原子写与索引重建完成持久化
         """
         name = name.strip()
         description = description.strip()
@@ -101,10 +125,37 @@ class MemoryStorage:
         type_enum = mem_type if isinstance(mem_type, MemoryType) else MemoryType.from_str(str(mem_type))
 
         self.memory_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{memory_slug(name)}.md"
+        base_slug = memory_slug(name)
+        filename = f"{base_slug}.md"
         path = self.resolve_path(filename)
+
+        # 智能冲突消歧：若文件已存在，检查已有文件的真实标题
+        if path.is_file():
+            try:
+                existing_meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+                existing_name = str(existing_meta.get("name") or "").strip()
+                # 若名称不一致（如 "My Mind" 与 "my-mind"），自动追加自增后缀防覆盖
+                if existing_name and existing_name.lower() != name.lower():
+                    counter = 2
+                    while True:
+                        candidate_name = f"{base_slug}-{counter}.md"
+                        candidate_path = self.resolve_path(candidate_name)
+                        if not candidate_path.is_file():
+                            filename = candidate_name
+                            path = candidate_path
+                            break
+                        # 如果已存在的 candidate 正好就是当前想要更新的 name，则命中复用
+                        c_meta, _ = parse_frontmatter(candidate_path.read_text(encoding="utf-8"))
+                        if str(c_meta.get("name") or "").strip().lower() == name.lower():
+                            filename = candidate_name
+                            path = candidate_path
+                            break
+                        counter += 1
+            except Exception as e:
+                logger.debug(f"[Memory Storage] 读取现有记忆检测冲突失败，继续执行写入: {e}")
+
         content = format_document(name, type_enum.value, description, body)
-        path.write_text(content, encoding="utf-8")
+        self._atomic_write_text(path, content)
 
         self.rebuild_index()
         return path
@@ -118,7 +169,11 @@ class MemoryStorage:
         except ValueError:
             return None
         if path.is_file():
-            return path.read_text(encoding="utf-8")
+            try:
+                return path.read_text(encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"[Memory Storage] 读取记忆文件失败: {filename} | {e}")
+                return None
         return None
 
     def delete_memory(self, filename: str) -> bool:
@@ -130,14 +185,18 @@ class MemoryStorage:
         except ValueError:
             return False
         if path.is_file():
-            path.unlink()
-            self.rebuild_index()
-            return True
+            try:
+                path.unlink()
+                self.rebuild_index()
+                return True
+            except Exception as e:
+                logger.warning(f"[Memory Storage] 删除记忆文件失败: {filename} | {e}")
+                return False
         return False
 
     def list_memories(self) -> List[MemoryRecord]:
         """
-        加载全部合法的长期记忆实体列表
+        加载全部合法的长期记忆实体列表（内置单文件损坏容错）
         """
         records: List[MemoryRecord] = []
         if not self.memory_dir.exists():
@@ -151,26 +210,31 @@ class MemoryStorage:
             except ValueError:
                 continue
 
-            content = safe_path.read_text(encoding="utf-8")
-            metadata, body = parse_frontmatter(content)
-            name = str(metadata.get("name") or path.stem).strip()
-            mem_type = MemoryType.from_str(str(metadata.get("type") or "project"))
-            description = str(metadata.get("description") or "").strip()
+            try:
+                content = safe_path.read_text(encoding="utf-8")
+                metadata, body = parse_frontmatter(content)
+                name = str(metadata.get("name") or path.stem).strip()
+                mem_type = MemoryType.from_str(str(metadata.get("type") or "project"))
+                description = str(metadata.get("description") or "").strip()
 
-            records.append(
-                MemoryRecord(
-                    name=name,
-                    type=mem_type,
-                    description=description,
-                    body=body.strip(),
-                    filename=path.name,
+                records.append(
+                    MemoryRecord(
+                        name=name,
+                        type=mem_type,
+                        description=description,
+                        body=body.strip(),
+                        filename=path.name,
+                    )
                 )
-            )
+            except Exception as e:
+                logger.warning(f"[Memory Storage] 解析单条记忆文件失败，已自动跳过: {path.name} | {e}")
+                continue
+
         return records
 
     def rebuild_index(self) -> None:
         """
-        从所有单条记忆文件中提取摘要，重新生成 MEMORY.md 索引目录
+        从所有单条记忆文件中提取摘要，重新生成 MEMORY.md 索引目录（原子落盘）
         """
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         lines = []
@@ -182,15 +246,19 @@ class MemoryStorage:
             except ValueError:
                 continue
 
-            metadata, body = parse_frontmatter(safe_path.read_text(encoding="utf-8"))
-            name = " ".join(str(metadata.get("name") or safe_path.stem).split())
-            first_line = next((line for line in body.splitlines() if line.strip()), "")
-            description = " ".join(str(metadata.get("description") or first_line).split())
-            lines.append(f"- [{name}]({safe_path.name}) - {description}")
+            try:
+                metadata, body = parse_frontmatter(safe_path.read_text(encoding="utf-8"))
+                name = " ".join(str(metadata.get("name") or safe_path.stem).split())
+                first_line = next((line for line in body.splitlines() if line.strip()), "")
+                description = " ".join(str(metadata.get("description") or first_line).split())
+                lines.append(f"- [{name}]({safe_path.name}) - {description}")
+            except Exception as e:
+                logger.warning(f"[Memory Storage] 索引解析跳过损坏文件: {path.name} | {e}")
+                continue
 
         index_path = self.resolve_path(self.INDEX_FILENAME, allow_index=True)
         index_content = "\n".join(lines) + ("\n" if lines else "")
-        index_path.write_text(index_content, encoding="utf-8")
+        self._atomic_write_text(index_path, index_content)
 
     def read_index(self) -> str:
         """
@@ -216,13 +284,13 @@ class MemoryStorage:
             try:
                 safe_path = self.resolve_path(path.name)
                 snapshot[safe_path.name] = safe_path.read_text(encoding="utf-8")
-            except ValueError:
+            except Exception:
                 continue
         return snapshot
 
     def restore_snapshot(self, snapshot: Dict[str, str]) -> None:
         """
-        将记忆存储完全还原为快照状态，并重建索引
+        将记忆存储完全还原为快照状态，并通过原子写重建索引
         """
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         # 清除当前可能已部分写入的不一致文件
@@ -230,12 +298,15 @@ class MemoryStorage:
             if path.name != self.INDEX_FILENAME:
                 try:
                     self.resolve_path(path.name).unlink()
-                except ValueError:
+                except (ValueError, OSError):
                     continue
 
         # 还原快照中的文件
         for filename, content in snapshot.items():
-            safe_path = self.resolve_path(filename)
-            safe_path.write_text(content, encoding="utf-8")
+            try:
+                safe_path = self.resolve_path(filename)
+                self._atomic_write_text(safe_path, content)
+            except Exception as e:
+                logger.error(f"[Memory Storage] 快照还原单文件失败: {filename} | {e}")
 
         self.rebuild_index()

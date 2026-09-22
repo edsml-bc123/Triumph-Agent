@@ -145,8 +145,9 @@ class PermissionHook:
             # 默认 bash 命令放行 (如 ls, cat, git, python 等)
             return PermissionAction.AUTO, "无害命令自动放行"
 
-        # 未知工具默认进入人工确认
-        return PermissionAction.ASK, f"未知工具 '{tool_name}' 需要授权"
+        # D. 其它所有系统受控工具（如 subagent 任务编排、计算器、数据分析等）默认放行
+        # 遵循开放世界假定 (Open World Assumption) 与风险驱动模型 (对齐 learn-claude-code s06)，彻底解除工具名强耦合
+        return PermissionAction.AUTO, f"受控工具 '{tool_name}' 自动放行"
 
     def ask_human_confirmation(self, tool_name: str, args: Dict[str, Any], reason: str) -> bool:
         """

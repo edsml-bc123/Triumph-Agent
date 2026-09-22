@@ -30,6 +30,7 @@ except ImportError:
 from client import DashScopeClient
 from context import BudgetHook, CompactorHook, ContextCompactor, CompactionConfig
 from memory import MemoryHook, MemoryManager
+from orchestration import SubAgentTool
 from runtime import AgentLoop, AgentState, AgentStatus, HookManager, TrajectoryHook
 from security import PermissionHook
 from tools.registry import ToolRegistry
@@ -42,6 +43,7 @@ def print_banner():
         "  基于阿里云百炼原生协议 + 显式状态机 + 权限审计 + 预算熔断 + 渐进式压缩 + 三层记忆\n"
         + "=" * 68 + "\n"
         "提示: 输入任务指令（如：“查看当前目录下的文件并统计数量”），按回车执行。\n"
+        "提示: 支持自动派生子智能体 (subagent) 隔离处理复杂子探索。\n"
         "提示: 输入 /clear 或 clear 可重置当前会话历史。\n"
         "提示: 输入 /memory 或 memory 可查看当前长期记忆索引。\n"
         "提示: 输入 q 或 exit 退出程序。\n"
@@ -56,6 +58,7 @@ async def main():
     workdir = Path.cwd()
     async with DashScopeClient() as client:
         registry = ToolRegistry(workdir=workdir)
+        registry.register_plugin(SubAgentTool(client=client))
 
         # 显式初始化生命周期钩子总线并挂载切面插件 (统一插件装配协议)
         # 工业级生产梯度参数：
