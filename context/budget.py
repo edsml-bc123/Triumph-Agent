@@ -98,7 +98,6 @@ class BudgetHook:
 # ----------------------------------------------------------------------
 
 async def _smoke_test():
-    import tempfile
     print("启动 context/budget.py 预算熔断引擎自测...")
 
     # 设定极小的测试上限：max=1000, warn=800

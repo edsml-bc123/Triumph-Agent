@@ -423,6 +423,7 @@ class ContextCompactor:
             response = await client.chat_completion(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
+                max_tokens=self.config.summary_max_tokens,
             )
             summary_content = response.content.strip()
         except Exception as e:
