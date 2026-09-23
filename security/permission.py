@@ -12,11 +12,17 @@ triumph-agent 权限审计与策略拦截引擎 (Security & Permission Engine)
    - 作为 PreToolUse 钩子执行，审查通过返回 None，审查拦截返回具体拒绝原因字符串。
 """
 
+from __future__ import annotations
+
 import re
 import sys
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from runtime.hooks import HookManager
+    from runtime.state import AgentState
 
 # 确保项目根目录在 sys.path 中
 _current_dir = Path(__file__).resolve().parent
@@ -165,6 +171,14 @@ class PermissionHook:
         print(f"  审查原因: {reason}")
         print("-" * 60)
 
+        # 清理终端输入流中可能残留的未消费脏输入，确保安全授权 100% 来自当下真实的物理敲击
+        try:
+            if hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+                import termios
+                termios.tcflush(sys.stdin, termios.TCIFLUSH)
+        except Exception:
+            pass
+
         try:
             choice = input("是否允许该操作执行? [y/N]: ").strip().lower()
             allowed = choice in ("y", "yes")
@@ -178,7 +192,7 @@ class PermissionHook:
             logger.warning("[Permission Audit] 授权等待被中断，默认拒绝")
             return False
 
-    def check(self, tool_name: str, args: Dict[str, Any], state: Any = None) -> Optional[str]:
+    def check(self, tool_name: str, args: Dict[str, Any], state: Optional[AgentState] = None) -> Optional[str]:
         """
         PreToolUse 钩子标准执行接口：
         - 放行返回 None
@@ -199,7 +213,7 @@ class PermissionHook:
         # AUTO 放行
         return None
 
-    def register_to(self, manager: Any) -> None:
+    def register_to(self, manager: HookManager) -> None:
         """实现插件装配协议：将自身注册到 PreToolUse 钩子点"""
         manager.register("PreToolUse", self.check)
 

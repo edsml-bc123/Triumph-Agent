@@ -10,8 +10,6 @@ triumph-agent 上下文渐进式压缩引擎 (ContextCompactor) 自动化测试
 6. CompactorHook 切面透明集成与 AgentState 自动化瘦身。
 """
 
-import json
-from pathlib import Path
 import pytest
 
 from context.compactor import CompactionConfig, CompactorHook, ContextCompactor
@@ -231,7 +229,7 @@ async def test_compactor_hook_integration(tmp_path):
     assert compactor.estimate_chars(state.messages) > 500
 
     # 触发 StepStart 切面
-    await manager.trigger("StepStart", step=2, state=state)
+    await manager.trigger("StepStart", state=state)
 
     # 验证微压缩自动生效：call_1, call_2 被压缩为占位符，仅 call_3 保留
     c1_msg = next(m for m in state.messages if m.get("tool_call_id") == "call_1")

@@ -15,9 +15,11 @@ triumph-agent 工具注册表与安全执行分发器 (Tool Registry)
    - 保证任何工具执行失败均以文本语义安全回填给模型，绝不崩坏主循环。
 """
 
+from __future__ import annotations
+
 import inspect
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -27,7 +29,7 @@ class ToolPlugin(Protocol):
     所有需要向注册表注入工具集合的插件必须满足此契约。
     """
 
-    def register_to(self, registry: "ToolRegistry") -> None:
+    def register_to(self, registry: ToolRegistry) -> None:
         """向 ToolRegistry 统一注册工具声明与执行 Handler"""
         ...
 
@@ -92,7 +94,7 @@ class ToolRegistry:
         """
         plugin.register_to(self)
 
-    def fork(self, exclude: Optional[Any] = None) -> "ToolRegistry":
+    def fork(self, exclude: Optional[Iterable[str]] = None) -> ToolRegistry:
         """
         通用派生/复制工具注册表：
         继承当前工作区沙箱与已注册工具，支持在派生时按名称排除特定工具集合。

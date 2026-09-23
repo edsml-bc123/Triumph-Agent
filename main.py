@@ -31,47 +31,59 @@ from client import DashScopeClient
 from context import BudgetHook, CompactorHook, ContextCompactor, CompactionConfig, CompactTool
 from memory import MemoryHook, MemoryManager
 from orchestration import (
-    BackgroundTaskHook,
-    BackgroundTaskManager,
-    BackgroundTaskTool,
+    DAGTaskTool,
+    JobHook,
+    JobManager,
+    JobTool,
     SubAgentTool,
+    TaskStore,
 )
-from runtime import AgentLoop, AgentState, AgentStatus, HookManager, TrajectoryHook
+from runtime import (
+    AgentLoop,
+    AgentState,
+    AgentStatus,
+    HookManager,
+    SessionContext,
+    TrajectoryHook,
+    read_terminal_input,
+)
 from security import PermissionHook
 from tools import BuiltinToolsPlugin, ToolRegistry
 
 
-def print_banner():
+def print_banner(session: SessionContext):
     banner = (
         "\n" + "=" * 68 + "\n"
         "  triumph-agent v0.2 (Mini Coding Agent Runtime)\n"
         "  基于阿里云百炼原生协议 + 显式状态机 + 权限审计 + 预算熔断 + 渐进式压缩 + 三层记忆\n"
         + "=" * 68 + "\n"
+        f"  [当前会话 ID]: {session.session_id}\n"
+        f"  [会话任务看板]: {session.tasks_dir.relative_to(session.workdir)}\n"
+        f"  [会话轨迹目录]: {session.runs_dir.relative_to(session.workdir)}\n"
+        + "-" * 68 + "\n"
         "提示: 输入任务指令（如：“查看当前目录下的文件并统计数量”），按回车执行。\n"
         "提示: 支持自动派生子智能体 (subagent) 隔离处理复杂子探索。\n"
-        "提示: 支持长耗时命令后台执行 (bash run_in_background=True) 与主动唤醒通知。\n"
-        "提示: 输入 /clear 或 clear 可重置当前会话历史。\n"
-        "提示: 输入 /memory 或 memory 可查看当前长期记忆索引。\n"
+        "提示: 支持 DAG 拓扑多任务拆解编排 (create_task / claim_task / list_tasks)。\n"
+        "提示: 支持后台异步作业托管 (run_in_background + list_jobs)。\n"
+        "提示: 输入 /clear 重置会话上下文并开启全新 Session 空间。\n"
+        "提示: 输入 /memory 查看当前持久化知识库目录。\n"
         "提示: 输入 q 或 exit 退出程序。\n"
     )
     print(banner)
 
 
 async def main():
-    print_banner()
-
-    # 初始化全局基础设施（保持连接池复用与工作区绑定）
+    # 初始化工作区与会话作用域 (Session Context)
     workdir = Path.cwd()
+    session = SessionContext(workdir=workdir)
+    print_banner(session)
+
     async with DashScopeClient() as client:
         registry = ToolRegistry(workdir=workdir)
-        bg_manager = BackgroundTaskManager(workdir=workdir, runs_dir=workdir / "runs")
+        job_manager = JobManager(workdir=workdir, runs_dir=session.runs_dir)
+        task_store = TaskStore(workdir=workdir, tasks_dir=session.tasks_dir)
 
-        # 工业级生产梯度参数：
-        # - L1: 单工具输出 >20,000 字符自动落盘截断并保留 1200 字符预览
-        # - L2: 对话历史 >30 条消息自动执行中段成对归档
-        # - L3/L4: 上下文 >35,000 字符（约 10k tokens）触发陈旧工具微压缩与弹性拟合，更早削减 Token 膨胀
-        # - L5: 上下文 >80,000 字符触发终极全局语义摘要折叠
-        # - 复杂任务预算硬上限放宽至 250,000 tokens
+        # 工业级生产梯度参数
         compactor_cfg = CompactionConfig(
             max_single_tool_output_chars=20_000,
             preview_chars=1200,
@@ -80,23 +92,24 @@ async def main():
             soft_threshold_chars=35_000,
             hard_threshold_chars=80_000,
         )
-        compactor = ContextCompactor(workdir=workdir, config=compactor_cfg)
+        compactor = ContextCompactor(workdir=workdir, config=compactor_cfg, base_runs_dir=session.runs_dir)
 
-        # 显式装配基础工具、后台管控、子智能体与主动上下文压缩插件 (ToolPlugin 协议)
-        registry.register_plugin(BuiltinToolsPlugin(workdir=workdir, bg_manager=bg_manager))
-        registry.register_plugin(BackgroundTaskTool(manager=bg_manager))
+        # 显式装配基础工具、后台作业管控、DAG 拓扑编排、子智能体与主动上下文压缩插件 (ToolPlugin 协议)
+        registry.register_plugin(BuiltinToolsPlugin(workdir=workdir, job_manager=job_manager))
+        registry.register_plugin(JobTool(manager=job_manager))
+        registry.register_plugin(DAGTaskTool(store=task_store))
         registry.register_plugin(SubAgentTool(client=client))
         registry.register_plugin(CompactTool(compactor=compactor, client=client))
 
         memory_mgr = MemoryManager(workdir=workdir)
 
         hooks = HookManager()
-        hooks.register_plugin(TrajectoryHook(runs_dir=workdir / "runs"))
+        hooks.register_plugin(TrajectoryHook(runs_dir=session.runs_dir))
         hooks.register_plugin(PermissionHook(workdir=workdir, interactive=True))
         hooks.register_plugin(BudgetHook(max_total_tokens=250000))
         hooks.register_plugin(CompactorHook(compactor=compactor, client=client))
         hooks.register_plugin(MemoryHook(manager=memory_mgr, client=client))
-        hooks.register_plugin(BackgroundTaskHook(manager=bg_manager))
+        hooks.register_plugin(JobHook(manager=job_manager))
 
         loop_engine = AgentLoop(client=client, registry=registry, hooks=hooks)
 
@@ -105,7 +118,7 @@ async def main():
 
         while True:
             try:
-                user_input = input("\ntriumph >> ").strip()
+                user_input = read_terminal_input("\ntriumph >> ")
             except (EOFError, KeyboardInterrupt):
                 logger.info("接收到中断信号，triumph-agent 正在安全退出。")
                 break
@@ -119,7 +132,13 @@ async def main():
 
             if user_input.lower() in ("/clear", "clear"):
                 session_messages.clear()
-                logger.info("已重置当前会话上下文，开启全新任务对话。")
+                session.reset()
+                # 重建 session 作用域下的 task_store，开启崭新看板
+                task_store.tasks_dir = session.tasks_dir
+                task_store.tasks_dir.mkdir(parents=True, exist_ok=True)
+                print(f"\n[已重置并开启全新 Session 空间]: {session.session_id}")
+                print(f"  [新任务看板]: {session.tasks_dir.relative_to(session.workdir)}")
+                print(f"  [新轨迹目录]: {session.runs_dir.relative_to(session.workdir)}")
                 continue
 
             if user_input.lower() in ("/memory", "memory"):

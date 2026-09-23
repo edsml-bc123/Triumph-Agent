@@ -11,12 +11,19 @@ triumph-agent 运行轨迹事件记录系统 (Trajectory Engineering)
    提供离线重放（Replay）、Benchmark 评测与 Prompt 调优所需的第一手物理凭据。
 """
 
+from __future__ import annotations
+
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from client import LLMResponse
+    from runtime.hooks import HookManager
+    from runtime.state import AgentState
 
 # 显式定义东八区时区 (UTC+8 / Asia/Shanghai)
 CST = timezone(timedelta(hours=8))
@@ -105,7 +112,7 @@ class TrajectoryHook:
         self.runs_dir = runs_dir
         self._recorder: Optional[TrajectoryRecorder] = None
 
-    def register_to(self, manager: Any) -> None:
+    def register_to(self, manager: HookManager) -> None:
         """显式向 HookManager 注册生命周期回调"""
         manager.register("UserPromptSubmit", self.on_user_prompt_submit)
         manager.register("StepStart", self.on_step_start)
@@ -113,15 +120,15 @@ class TrajectoryHook:
         manager.register("PostToolUse", self.on_post_tool_use)
         manager.register("Stop", self.on_stop)
 
-    async def on_user_prompt_submit(self, prompt: str, state: Any) -> None:
+    async def on_user_prompt_submit(self, prompt: str, state: AgentState) -> None:
         self._recorder = TrajectoryRecorder(run_id=state.run_id, runs_dir=self.runs_dir)
         self._recorder.record("TaskStart", user_prompt=prompt, max_steps=state.max_steps)
 
-    async def on_step_start(self, step: int, state: Any) -> None:
+    async def on_step_start(self, state: AgentState) -> None:
         if self._recorder:
-            self._recorder.record("StepStart", step=step)
+            self._recorder.record("StepStart", step=state.step_count)
 
-    async def on_llm_response(self, response: Any, state: Any) -> None:
+    async def on_llm_response(self, response: LLMResponse, state: AgentState) -> None:
         if self._recorder and getattr(response, "usage", None):
             usage_dict = {
                 "prompt_tokens": response.usage.prompt_tokens,
@@ -147,7 +154,7 @@ class TrajectoryHook:
         output: str,
         duration_ms: float,
         tool_call_id: str,
-        state: Any,
+        state: AgentState,
     ) -> None:
         if self._recorder:
             self._recorder.record(
@@ -160,7 +167,7 @@ class TrajectoryHook:
                 duration_ms=round(duration_ms, 2),
             )
 
-    async def on_stop(self, state: Any) -> None:
+    async def on_stop(self, state: AgentState) -> None:
         if self._recorder:
             self._recorder.record(
                 "TaskEnd",

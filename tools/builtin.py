@@ -10,15 +10,17 @@ triumph-agent 内置基础原子工具集 (Builtin Tools Plugin)
 3. 遵循 ToolPlugin 契约协议，作为一个纯净的、高内聚的标准工具插件。
 """
 
+from __future__ import annotations
+
 import glob as g
 import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from orchestration.background import BackgroundTaskManager
+    from orchestration.job import JobManager
     from tools.registry import ToolRegistry
 
 
@@ -31,19 +33,19 @@ class BuiltinToolsPlugin:
     def __init__(
         self,
         workdir: Optional[Path] = None,
-        bg_manager: Optional["BackgroundTaskManager"] = None,
+        job_manager: Optional[JobManager] = None,
     ):
         self.workdir = (workdir or Path.cwd()).resolve()
-        self.bg_manager = bg_manager
+        self.job_manager = job_manager
 
-    def register_to(self, registry: "ToolRegistry") -> None:
+    def register_to(self, registry: ToolRegistry) -> None:
         """统一向 ToolRegistry 挂载内置工具"""
         for name, description, parameters, handler in self._get_specs(registry):
             registry.register(name, description, parameters, handler)
 
     def _get_specs(
-        self, registry: "ToolRegistry"
-    ) -> List[Tuple[str, str, Dict[str, Any], Any]]:
+        self, registry: ToolRegistry
+    ) -> List[Tuple[str, str, Dict[str, Any], Callable[..., Any]]]:
         """定义基础工具的标准规格与对应的物理 Handler"""
 
         def run_bash(command: str, run_in_background: bool = False) -> str:
@@ -53,21 +55,21 @@ class BuiltinToolsPlugin:
             if any(d in clean_cmd for d in dangerous):
                 return "Error: Dangerous command blocked by safety policy"
 
-            # 1. 后台长任务非阻塞模式 (对标 s11)
+            # 1. 后台长作业非阻塞模式 (对标 s11)
             if run_in_background:
-                if self.bg_manager is not None:
+                if self.job_manager is not None:
                     try:
-                        task = self.bg_manager.start(clean_cmd)
+                        job = self.job_manager.start(clean_cmd)
                         return (
-                            f"[Background task {task.task_id} started (PID: {task.pid})]\n"
-                            f"- Command: {task.command}\n"
-                            f"- Log file: {task.log_file}\n"
-                            "The task is executing in background. You can use check_task to monitor it, "
+                            f"[Background job {job.job_id} started (PID: {job.pid})]\n"
+                            f"- Command: {job.command}\n"
+                            f"- Log file: {job.log_file}\n"
+                            "The job is executing in background. You can use `check_job` to monitor it, "
                             "or wait for an automatic completion notification on later turns."
                         )
                     except Exception as e:
-                        return f"Error starting background task: {e}"
-                return "Error: Background task manager is not configured in this environment."
+                        return f"Error starting background job: {e}"
+                return "Error: Background job manager is not configured in this environment."
 
             # 2. 正常同步执行模式 (对标 s02)
             try:

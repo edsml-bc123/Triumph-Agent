@@ -13,6 +13,8 @@ triumph-agent 状态机与上下文模型 (State Contract)
    吸收 learn-claude-code s17 思想，内建 Goal 目标属性与 Stop 拦截计数器 (consecutive_blocks)。
 """
 
+from __future__ import annotations
+
 import sys
 import uuid
 from contextvars import ContextVar
@@ -24,7 +26,7 @@ from typing import Any, Dict, List, Optional
 # 异步协程级当前运行任务 ID 上下文变量 (Ambient Run Context，用于跨层透传与树状派生溯源)
 current_run_id_var: ContextVar[Optional[str]] = ContextVar("current_run_id", default=None)
 # 异步协程级当前运行状态机上下文变量 (Ambient State Context，用于工具就地感知会话状态)
-current_state_var: ContextVar[Optional["AgentState"]] = ContextVar("current_state", default=None)
+current_state_var: ContextVar[Optional[AgentState]] = ContextVar("current_state", default=None)
 
 
 # 确保当前项目根目录在 sys.path 中，便于直接调用 client 模块

@@ -5,9 +5,11 @@ triumph-agent 长期记忆数据模型定义 (Memory Models)
 采用强类型 (str, Enum) 与显式反序列化验证器，杜绝类型体操与冗余定义。
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional, Set
+from typing import Optional, Set
 
 
 class MemoryType(str, Enum):
@@ -25,7 +27,7 @@ class MemoryType(str, Enum):
         return {item.value for item in cls}
 
     @classmethod
-    def from_str(cls, value: str) -> "MemoryType":
+    def from_str(cls, value: str) -> MemoryType:
         """安全转换字符串为 MemoryType 枚举，非法值优雅降级为 PROJECT"""
         try:
             return cls(value.strip().lower())
@@ -45,7 +47,7 @@ class MemoryScope(str, Enum):
         return {item.value for item in cls}
 
     @classmethod
-    def from_str(cls, value: str) -> "MemoryScope":
+    def from_str(cls, value: str) -> MemoryScope:
         try:
             return cls(value.strip().lower())
         except (ValueError, AttributeError):
@@ -65,7 +67,7 @@ class CandidateMemory:
     body: str
 
     @classmethod
-    def from_raw(cls, raw: Any) -> Optional["CandidateMemory"]:
+    def from_raw(cls, raw: object) -> Optional[CandidateMemory]:
         """
         数据清洗与类型安全门禁：
         校验原始输入是否具备完整字段，非法或缺失时返回 None

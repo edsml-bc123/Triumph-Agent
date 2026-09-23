@@ -8,8 +8,12 @@ triumph-agent 生命周期钩子 (HookManager) 自动化测试
 4. 全流程放行返回 None 契约。
 """
 
+from __future__ import annotations
+
+from typing import Any, Dict, Optional
 import pytest
 from runtime.hooks import HookManager
+from runtime.state import AgentState
 
 
 @pytest.mark.asyncio
@@ -39,17 +43,17 @@ async def test_hooks_short_circuit_behavior():
     manager = HookManager()
     call_log = []
 
-    def first_hook(tool_name: str, **kwargs):
+    def first_hook(tool_name: str, args: Dict[str, Any], state: Optional[AgentState]):
         call_log.append("first")
         return None  # 放行
 
-    def blocking_hook(tool_name: str, **kwargs):
+    def blocking_hook(tool_name: str, args: Dict[str, Any], state: Optional[AgentState]):
         call_log.append("blocking")
         if tool_name == "bash":
             return "Blocked by security rule"
         return None
 
-    def third_hook(tool_name: str, **kwargs):
+    def third_hook(tool_name: str, args: Dict[str, Any], state: Optional[AgentState]):
         call_log.append("third")
         return None
 
@@ -59,14 +63,14 @@ async def test_hooks_short_circuit_behavior():
     manager.register("PreToolUse", third_hook)
 
     # 触发 bash 工具调用（应被第 2 个拦截）
-    res_block = await manager.trigger("PreToolUse", tool_name="bash", command="rm -rf")
+    res_block = await manager.trigger("PreToolUse", tool_name="bash", args={"command": "rm -rf"}, state=None)
     assert res_block == "Blocked by security rule"
     # 验证短路：第 3 个钩子绝不会被执行
     assert call_log == ["first", "blocking"]
 
     # 触发 safe 工具调用（全部放行）
     call_log.clear()
-    res_allow = await manager.trigger("PreToolUse", tool_name="read_file", path="a.txt")
+    res_allow = await manager.trigger("PreToolUse", tool_name="read_file", args={"path": "a.txt"}, state=None)
     assert res_allow is None
     assert call_log == ["first", "blocking", "third"]
 
@@ -127,7 +131,7 @@ async def test_loop_pre_tool_use_terminal_guard(tmp_path):
 
     # 注册一个在 PreToolUse 阶段直接熔断状态机的钩子
     @manager.on("PreToolUse")
-    async def fatal_guard(tool_name, args, state, **kwargs):
+    async def fatal_guard(tool_name, args, state):
         state.mark_failed("致命安全违规，紧急下线")
 
     registry = ToolRegistry(workdir=tmp_path)
@@ -170,13 +174,13 @@ async def test_loop_crash_guarantees_stop_and_task_end(tmp_path):
     stop_called = False
 
     @manager.on("Stop")
-    async def track_stop(state, **kwargs):
+    async def track_stop(state):
         nonlocal stop_called
         stop_called = True
 
     # 模拟在 StepStart 切面发生未被捕获的严重系统级异常
     @manager.on("StepStart")
-    async def buggy_plugin(step, **kwargs):
+    async def buggy_plugin(state):
         raise RuntimeError("第三方插件或底层运行时发生未捕获致命异常！")
 
     registry = ToolRegistry(workdir=tmp_path)

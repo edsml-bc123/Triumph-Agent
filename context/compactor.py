@@ -13,6 +13,8 @@ triumph-agent 上下文渐进式压缩引擎 (Context Compactor)
    绝不粗暴删除单条消息字典，通过内容覆写保证 assistant.tool_calls 与 role: tool 永远严格成对匹配。
 """
 
+from __future__ import annotations
+
 import json
 import re
 import sys
@@ -20,7 +22,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from loguru import logger
 
 # 确保项目根目录在 sys.path 中
@@ -31,6 +33,10 @@ if str(_root_dir) not in sys.path:
 
 from client import DashScopeClient
 from runtime.state import AgentState
+
+if TYPE_CHECKING:
+    from runtime.hooks import HookManager
+    from tools.registry import ToolRegistry
 
 
 @dataclass
@@ -509,11 +515,11 @@ class CompactorHook:
         self.compactor = compactor or ContextCompactor()
         self.client = client
 
-    def register_to(self, manager: Any) -> None:
+    def register_to(self, manager: HookManager) -> None:
         """显式向 HookManager 注册生命周期回调"""
         manager.register("StepStart", self.on_step_start)
 
-    async def on_step_start(self, step: int, state: AgentState, **kwargs: Any) -> None:
+    async def on_step_start(self, state: AgentState) -> None:
         """在每轮自主循环启动、发起 LLM 推理前，执行上下文压缩与修剪"""
         # 优先读取 AgentState 明确设定的目标，若无则回退寻找首条用户提示词
         user_goal = state.current_goal or ""
@@ -562,7 +568,7 @@ class CompactTool:
         self.compactor = compactor or ContextCompactor()
         self.client = client
 
-    def register_to(self, registry: Any) -> None:
+    def register_to(self, registry: ToolRegistry) -> None:
         """统一向 ToolRegistry 注册工具契约"""
         registry.register(
             name=self.name,
@@ -571,7 +577,7 @@ class CompactTool:
             handler=self.run,
         )
 
-    async def run(self, focus: str = "", **kwargs: Any) -> str:
+    async def run(self, focus: str = "") -> str:
         """
         物理执行主动上下文压缩：
         1. 从协程级上下文变量 current_state_var 获取当前会话状态机；

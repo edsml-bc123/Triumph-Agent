@@ -11,9 +11,11 @@ triumph-agent 上下文与 Token 预算熔断引擎 (Token Budget Manager)
    - 继承统一插件装配协议 register_to(manager)，零侵入挂载在 LLMResponse 与 StepStart 切面上。
 """
 
+from __future__ import annotations
+
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 # 确保项目根目录在 sys.path 中
 _current_dir = Path(__file__).resolve().parent
@@ -23,7 +25,10 @@ if str(_root_dir) not in sys.path:
 
 from loguru import logger
 from client import LLMResponse
-from runtime.state import AgentState, AgentStatus
+from runtime.state import AgentState
+
+if TYPE_CHECKING:
+    from runtime.hooks import HookManager
 
 
 class BudgetHook:
@@ -49,7 +54,7 @@ class BudgetHook:
         self.warn_ratio = warn_ratio
         self.warn_threshold = int(self.max_total_tokens * self.warn_ratio)
 
-    def register_to(self, manager: Any) -> None:
+    def register_to(self, manager: HookManager) -> None:
         """
         实现插件装配协议：将自身注册到 LLMResponse 和 StepStart 节点
         """
@@ -83,7 +88,7 @@ class BudgetHook:
                 f"当前消耗: {current_tokens} / 上限: {self.max_total_tokens}"
             )
 
-    async def on_step_start(self, step: int, state: AgentState) -> None:
+    async def on_step_start(self, state: AgentState) -> None:
         """
         单步迭代前探针：若已经处于终态或 Token 已超限，确保阻断
         """

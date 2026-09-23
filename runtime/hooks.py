@@ -12,6 +12,8 @@ triumph-agent 生命周期钩子调度引擎 (Unified Hook Manager)
    - 本模块仅维护生命周期注册表与事件调度，不硬编码绑定任何具体业务插件。
 """
 
+from __future__ import annotations
+
 import inspect
 from typing import Any, Callable, Dict, List, Protocol, runtime_checkable
 
@@ -23,7 +25,7 @@ class HookPlugin(Protocol):
     所有扩展插件（如 TrajectoryHook, PermissionHook, MemoryHook 等）必须满足此契约。
     """
 
-    def register_to(self, manager: "HookManager") -> None:
+    def register_to(self, manager: HookManager) -> None:
         """向 HookManager 统一注册生命周期回调钩子"""
         ...
 
@@ -42,9 +44,9 @@ class HookManager:
 
     def __init__(self):
         # 内部维护事件与回调列表映射
-        self._hooks: Dict[str, List[Callable]] = {}
+        self._hooks: Dict[str, List[Callable[..., Any]]] = {}
 
-    def register(self, event: str, callback: Callable) -> None:
+    def register(self, event: str, callback: Callable[..., Any]) -> None:
         """
         统一注册钩子：向指定事件挂载一个回调函数（支持同步 def 与异步 async def）
         """
@@ -52,13 +54,13 @@ class HookManager:
             self._hooks[event] = []
         self._hooks[event].append(callback)
 
-    def on(self, event: str) -> Callable:
+    def on(self, event: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """
         统一注册装饰器语法糖：
         @manager.on("PreToolUse")
         async def my_hook(...): ...
         """
-        def decorator(callback: Callable) -> Callable:
+        def decorator(callback: Callable[..., Any]) -> Callable[..., Any]:
             self.register(event, callback)
             return callback
         return decorator

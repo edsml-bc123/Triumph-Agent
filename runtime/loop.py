@@ -54,11 +54,15 @@ class AgentLoop:
     def _default_system_prompt(self) -> str:
         return (
             f"你是一个拥有自主代码编写和系统操作能力的 Coding Agent，当前工作目录是: {self.registry.workdir}。\n"
-            "你可以使用提供的工具（bash、read_file、write_file、edit_file、glob）来分析和解决问题。\n"
-            "原则：\n"
-            "1. 务实求真，用实际操作和工具验证结果，不要口头编造；\n"
-            "2. 当需要修改代码或执行命令时，主动调用工具；\n"
-            "3. 任务彻底解决后，给出简明扼要的总结。"
+            "你可以使用系统提供的全套工具来分析和解决工程问题。\n"
+            "工作原则：\n"
+            "1. 务实求真：用实际操作和工具验证结果，严禁口头臆造；\n"
+            "2. 操作主动性：当需要修改代码、读取文件或执行终端命令时，主动调用对应工具；\n"
+            "3. 复杂任务追踪：规划多步骤任务时，使用任务工具（create_task / update_task / claim_task / complete_task / list_tasks）跟踪依赖与进度。"
+            "先创建所有任务节点，获取运行时 ID 后使用 update_task 绑定前置依赖；依赖完成后先认领（claim_task）再执行，完成后标记完成以解锁下游任务；\n"
+            "4. 后台长作业托管：启动本地服务器、长期构建或耗时命令时，开启 bash(..., run_in_background=True) 避免阻塞，使用 check_job/list_jobs 管理后台作业；\n"
+            "5. 探索隔离：面对独立的复杂子问题或开放性探索时，使用 subagent 派生子智能体在干净上下文中完成；\n"
+            "6. 任务闭环：所有步骤达成后，给出清晰扼要的总结。"
         )
 
     async def run(self, state: AgentState) -> AgentState:
@@ -95,7 +99,7 @@ class AgentLoop:
                     logger.warning(f"[CircuitBreaker] {state.last_error}")
                     break
 
-                await self.hooks.trigger("StepStart", step=state.step_count, state=state)
+                await self.hooks.trigger("StepStart", state=state)
                 if state.is_terminal:
                     logger.warning(f"[CircuitBreaker] 轮次启动切面阻断执行: {state.last_error}")
                     break

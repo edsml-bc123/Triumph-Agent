@@ -6,20 +6,32 @@ triumph-agent 多智能体与编排系统 (Orchestration Engine)
 2. 后续阶段逐步扩展: background (长任务), dag (任务图编排), team & worktree (战队协同)
 """
 
-from .subagent import SubAgentTool
-from .background import (
-    BackgroundTask,
-    BackgroundTaskHook,
-    BackgroundTaskManager,
-    BackgroundTaskTool,
-    TaskStatus,
+from .job import (
+    BackgroundJob,
+    JobHook,
+    JobManager,
+    JobStatus,
+    JobTool,
+)
+from .dag import (
+    DAGTask,
+    DAGTaskStatus,
+    DAGTaskTool,
+    TaskStore,
+)
+from .subagent import (
+    SubAgentTool,
 )
 
 __all__ = [
     "SubAgentTool",
-    "BackgroundTask",
-    "BackgroundTaskHook",
-    "BackgroundTaskManager",
-    "BackgroundTaskTool",
-    "TaskStatus",
+    "BackgroundJob",
+    "JobHook",
+    "JobManager",
+    "JobTool",
+    "JobStatus",
+    "DAGTask",
+    "DAGTaskStatus",
+    "TaskStore",
+    "DAGTaskTool",
 ]

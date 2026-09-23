@@ -79,7 +79,7 @@ async def test_budget_hook_plugin_integration():
     assert state.status == AgentStatus.FAILED
 
     # 3. 验证在后续 StepStart 探针时继续坚决阻断
-    await hooks.trigger("StepStart", step=2, state=state)
+    await hooks.trigger("StepStart", state=state)
     assert state.status == AgentStatus.FAILED
 
 

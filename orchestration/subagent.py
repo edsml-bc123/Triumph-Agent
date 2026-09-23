@@ -17,7 +17,7 @@ triumph-agent 子智能体调度与物理上下文隔离引擎 (Subagent Engine)
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 from loguru import logger
 
 from client import DashScopeClient
@@ -106,7 +106,7 @@ class SubAgentTool:
             handler=self._dispatch_handler,
         )
 
-    async def _dispatch_handler(self, prompt: str, max_steps: Optional[int] = None, **kwargs: Any) -> str:
+    async def _dispatch_handler(self, prompt: str, max_steps: Optional[int] = None) -> str:
         return await self.run(prompt=prompt, max_steps=max_steps)
 
     async def run(

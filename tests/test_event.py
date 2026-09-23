@@ -55,7 +55,7 @@ async def test_trajectory_hook_integration():
         state = AgentState(run_id="hook_record_001")
         # 触发完整生命周期事件
         await hooks.trigger("UserPromptSubmit", prompt="测试提示词", state=state)
-        await hooks.trigger("StepStart", step=1, state=state)
+        await hooks.trigger("StepStart", state=state)
         await hooks.trigger(
             "PostToolUse",
             tool_name="bash",
