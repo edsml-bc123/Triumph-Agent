@@ -12,7 +12,6 @@ triumph-agent 核心执行循环引擎 (Agent Loop)
    以 state.is_terminal 作为唯一生命周期守卫，彻底消灭死循环。
 """
 
-import asyncio
 import sys
 from pathlib import Path
 from typing import Optional
@@ -27,10 +26,9 @@ import time
 from loguru import logger
 
 from client import DashScopeClient
-from runtime.event import TrajectoryHook
 from runtime.hooks import HookManager
-from runtime.state import AgentState, AgentStatus, current_run_id_var
-from tools.registry import ToolRegistry, default_registry
+from runtime.state import AgentState, current_run_id_var
+from tools import ToolRegistry
 # ----------------------------------------------------------------------
 # AgentLoop 核心执行引擎
 # ----------------------------------------------------------------------
@@ -43,22 +41,15 @@ class AgentLoop:
 
     def __init__(
         self,
-        client: Optional[DashScopeClient] = None,
-        registry: Optional[ToolRegistry] = None,
-        hooks: Optional[HookManager] = None,
+        registry: ToolRegistry,
+        client: DashScopeClient,
+        hooks: HookManager,
         system_prompt: Optional[str] = None,
     ):
-        self.client = client or DashScopeClient()
-        self.registry = registry or default_registry
+        self.registry = registry
+        self.client = client
+        self.hooks = hooks
         self.system_prompt = system_prompt or self._default_system_prompt()
-
-        # 实例级 Hook 事件总线 (默认自动挂载 TrajectoryHook 轨迹插件)
-        if hooks is not None:
-            self.hooks = hooks
-        else:
-            self.hooks = HookManager()
-            runs_dir = self.registry.workdir / "runs"
-            TrajectoryHook(runs_dir=runs_dir).register_to(self.hooks)
 
     def _default_system_prompt(self) -> str:
         return (
@@ -214,47 +205,4 @@ class AgentLoop:
         return state
 
 
-# ----------------------------------------------------------------------
-# 模块自测：完整真实的自主多轮任务演练
-# ----------------------------------------------------------------------
 
-async def _smoke_test():
-    import tempfile
-    print("启动 runtime/loop.py 自主 ReAct 循环实战自测...")
-
-    # 使用临时安全沙箱目录
-    with tempfile.TemporaryDirectory() as tmpdir:
-        sandbox_dir = Path(tmpdir)
-        registry = ToolRegistry(workdir=sandbox_dir)
-        loop_engine = AgentLoop(registry=registry)
-
-        # 构造一个需要自主执行 2~3 轮工具调用的复杂任务
-        state = AgentState(max_steps=10)
-        task_prompt = (
-            "请完成以下操作：\n"
-            "1. 使用 write_file 工具在当前目录创建一个 'agent_test.txt'，写入 'Phase 1 Complete'；\n"
-            "2. 使用 read_file 工具读取该文件，验证内容是否正确；\n"
-            "3. 确认无误后，向我汇报文件中的确切内容。"
-        )
-        state.add_user_message(task_prompt)
-
-        print(f"\n📋 [任务输入]:\n{task_prompt}\n")
-        final_state = await loop_engine.run(state)
-
-        # 验证自主执行的终态与各轮历史
-        print("=" * 60)
-        print("🔍 验证执行结果与状态机体征:")
-        print(f"- Run ID:         {final_state.run_id}")
-        print(f"- 最终状态:       {final_state.status.value}")
-        print(f"- 迭代步数:       {final_state.step_count} 轮")
-        print(f"- 累计消耗 Token: {final_state.total_tokens}")
-        print(f"- 历史消息总数:   {len(final_state.messages)} 条")
-
-        assert final_state.status == AgentStatus.SUCCESS
-        assert (sandbox_dir / "agent_test.txt").exists()
-        assert (sandbox_dir / "agent_test.txt").read_text().strip() == "Phase 1 Complete"
-        print("\n✅ runtime/loop.py 自主 ReAct 多轮循环全流程验证成功！")
-
-
-if __name__ == "__main__":
-    asyncio.run(_smoke_test())

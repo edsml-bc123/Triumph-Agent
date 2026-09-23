@@ -7,7 +7,19 @@ triumph-agent 多智能体与编排系统 (Orchestration Engine)
 """
 
 from .subagent import SubAgentTool
+from .background import (
+    BackgroundTask,
+    BackgroundTaskHook,
+    BackgroundTaskManager,
+    BackgroundTaskTool,
+    TaskStatus,
+)
 
 __all__ = [
     "SubAgentTool",
+    "BackgroundTask",
+    "BackgroundTaskHook",
+    "BackgroundTaskManager",
+    "BackgroundTaskTool",
+    "TaskStatus",
 ]

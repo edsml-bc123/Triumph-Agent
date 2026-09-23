@@ -8,7 +8,6 @@ triumph-agent 阿里云百炼 (DashScope) 客户端封装
 4. 全面防御性异常处理，将网络闪断、HTTP 4xx/5xx 转为具象的业务异常。
 """
 
-import asyncio
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -260,54 +259,3 @@ class DashScopeClient:
         )
 
 
-# ----------------------------------------------------------------------
-# 4. 模块独立快速冒烟自测
-# ----------------------------------------------------------------------
-
-async def _smoke_test():
-    print("启动 client.py 冒烟自测...")
-    
-    async with DashScopeClient() as client:
-        # 测试 1: 普通直接对话
-        print("\n[测试 1] 发送纯文本问答...")
-        res = await client.chat_completion(
-            messages=[{"role": "user", "content": "请用一句话介绍你自己。"}]
-        )
-        print(f"Model:         {res.model}")
-        print(f"Finish Reason: {res.finish_reason}")
-        print(f"Answer:        {res.content}")
-        print(f"Usage:         {res.usage.total_tokens} tokens")
-
-        # 测试 2: 带工具调用的对话
-        print("\n[测试 2] 发送带工具的问答 (探查 Tool Calling 解析)...")
-        demo_tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "calculate_sum",
-                    "description": "计算两个整数的和",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "a": {"type": "integer"},
-                            "b": {"type": "integer"},
-                        },
-                        "required": ["a", "b"],
-                    },
-                },
-            }
-        ]
-        res_tool = await client.chat_completion(
-            messages=[{"role": "user", "content": "帮我算一下 1234 + 5678 等于多少？"}],
-            tools=demo_tools,
-        )
-        print(f"Has Tool Calls: {res_tool.has_tool_calls}")
-        print(f"Finish Reason:  {res_tool.finish_reason}")
-        for tc in res_tool.tool_calls:
-            print(f" -> 触发工具: {tc.name} | 参数: {tc.parse_arguments()} | ID: {tc.id}")
-
-    print("\n✅ client.py 冒烟自测全部通过！封装健壮可用。")
-
-
-if __name__ == "__main__":
-    asyncio.run(_smoke_test())

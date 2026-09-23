@@ -30,10 +30,15 @@ except ImportError:
 from client import DashScopeClient
 from context import BudgetHook, CompactorHook, ContextCompactor, CompactionConfig
 from memory import MemoryHook, MemoryManager
-from orchestration import SubAgentTool
+from orchestration import (
+    BackgroundTaskHook,
+    BackgroundTaskManager,
+    BackgroundTaskTool,
+    SubAgentTool,
+)
 from runtime import AgentLoop, AgentState, AgentStatus, HookManager, TrajectoryHook
 from security import PermissionHook
-from tools.registry import ToolRegistry
+from tools import BuiltinToolsPlugin, ToolRegistry
 
 
 def print_banner():
@@ -44,6 +49,7 @@ def print_banner():
         + "=" * 68 + "\n"
         "提示: 输入任务指令（如：“查看当前目录下的文件并统计数量”），按回车执行。\n"
         "提示: 支持自动派生子智能体 (subagent) 隔离处理复杂子探索。\n"
+        "提示: 支持长耗时命令后台执行 (bash run_in_background=True) 与主动唤醒通知。\n"
         "提示: 输入 /clear 或 clear 可重置当前会话历史。\n"
         "提示: 输入 /memory 或 memory 可查看当前长期记忆索引。\n"
         "提示: 输入 q 或 exit 退出程序。\n"
@@ -58,6 +64,11 @@ async def main():
     workdir = Path.cwd()
     async with DashScopeClient() as client:
         registry = ToolRegistry(workdir=workdir)
+        bg_manager = BackgroundTaskManager(workdir=workdir, runs_dir=workdir / "runs")
+
+        # 显式装配基础工具（注入后台调度器，终极融合 bash）、后台管控工具及子智能体
+        registry.register_plugin(BuiltinToolsPlugin(workdir=workdir, bg_manager=bg_manager))
+        registry.register_plugin(BackgroundTaskTool(manager=bg_manager))
         registry.register_plugin(SubAgentTool(client=client))
 
         # 显式初始化生命周期钩子总线并挂载切面插件 (统一插件装配协议)
@@ -84,6 +95,7 @@ async def main():
         hooks.register_plugin(BudgetHook(max_total_tokens=250000))
         hooks.register_plugin(CompactorHook(compactor=compactor, client=client))
         hooks.register_plugin(MemoryHook(manager=memory_mgr, client=client))
+        hooks.register_plugin(BackgroundTaskHook(manager=bg_manager))
 
         loop_engine = AgentLoop(client=client, registry=registry, hooks=hooks)
 

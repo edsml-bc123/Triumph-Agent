@@ -2,6 +2,11 @@
 triumph-agent 工具系统 (Tools Engine)
 """
 
-from .registry import ToolPlugin, ToolRegistry, default_registry
+from .builtin import BuiltinToolsPlugin
+from .registry import ToolPlugin, ToolRegistry
 
-__all__ = ["ToolRegistry", "ToolPlugin", "default_registry"]
+__all__ = [
+    "BuiltinToolsPlugin",
+    "ToolRegistry",
+    "ToolPlugin",
+]

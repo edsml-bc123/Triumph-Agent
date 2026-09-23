@@ -17,7 +17,7 @@ import pytest
 from client import LLMResponse, ToolCall
 from orchestration import SubAgentTool
 from runtime.state import current_run_id_var
-from tools.registry import ToolRegistry
+from tools import BuiltinToolsPlugin, ToolRegistry
 
 
 @pytest.fixture
@@ -29,24 +29,31 @@ def mock_client():
     return client
 
 
+@pytest.fixture
+def base_registry(tmp_path):
+    """标准测试夹具：预装配 BuiltinToolsPlugin 的干净工具注册表"""
+    reg = ToolRegistry(workdir=tmp_path)
+    reg.register_plugin(BuiltinToolsPlugin(workdir=tmp_path))
+    return reg
+
+
 # ----------------------------------------------------------------------
 # 1. 统一插件注册与工具剥离防递归测试
 # ----------------------------------------------------------------------
 
-def test_subagent_tool_registration_and_stripping(mock_client, tmp_path):
-    registry = ToolRegistry(workdir=tmp_path)
+def test_subagent_tool_registration_and_stripping(mock_client, base_registry):
     # 采用优雅的统一插件装配协议 (无任何冗余传参)
-    registry.register_plugin(SubAgentTool(client=mock_client))
+    base_registry.register_plugin(SubAgentTool(client=mock_client))
 
     # 1. 父注册表包含 subagent 工具
-    parent_specs = registry.get_tools_spec()
+    parent_specs = base_registry.get_tools_spec()
     tool_names = [s["function"]["name"] for s in parent_specs]
     assert "subagent" in tool_names
     assert "bash" in tool_names
     assert "read_file" in tool_names
 
     # 2. 通过通用 fork 派生的子注册表严格剥离了 subagent（仅排除自身 1 个工具），杜绝嵌套递归
-    sub_registry = registry.fork(exclude={"subagent"})
+    sub_registry = base_registry.fork(exclude={"subagent"})
     sub_specs = sub_registry.get_tools_spec()
     sub_tool_names = [s["function"]["name"] for s in sub_specs]
     assert "subagent" not in sub_tool_names
@@ -59,10 +66,9 @@ def test_subagent_tool_registration_and_stripping(mock_client, tmp_path):
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_subagent_context_isolation(mock_client, tmp_path):
-    registry = ToolRegistry(workdir=tmp_path)
+async def test_subagent_context_isolation(mock_client, base_registry):
     tool = SubAgentTool(client=mock_client)
-    registry.register_plugin(tool)
+    base_registry.register_plugin(tool)
 
     captured_messages = []
 
@@ -95,13 +101,12 @@ async def test_subagent_context_isolation(mock_client, tmp_path):
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_subagent_execution_success_and_summary_returned(mock_client, tmp_path):
+async def test_subagent_execution_success_and_summary_returned(mock_client, tmp_path, base_registry):
     test_file = tmp_path / "target.py"
     test_file.write_text("def add(a, b): return a + b\n", encoding="utf-8")
 
-    registry = ToolRegistry(workdir=tmp_path)
     tool = SubAgentTool(client=mock_client)
-    registry.register_plugin(tool)
+    base_registry.register_plugin(tool)
 
     turn1_response = LLMResponse(
         content="我来阅读 target.py 文件",
@@ -136,10 +141,9 @@ async def test_subagent_execution_success_and_summary_returned(mock_client, tmp_
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_subagent_resilience_on_failure(mock_client, tmp_path):
-    registry = ToolRegistry(workdir=tmp_path)
+async def test_subagent_resilience_on_failure(mock_client, base_registry):
     tool = SubAgentTool(client=mock_client)
-    registry.register_plugin(tool)
+    base_registry.register_plugin(tool)
 
     mock_client.chat_completion.side_effect = RuntimeError("网络对端拒绝连接")
 
@@ -157,12 +161,11 @@ async def test_subagent_resilience_on_failure(mock_client, tmp_path):
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_subagent_parent_run_id_and_trajectory(mock_client, tmp_path):
+async def test_subagent_parent_run_id_and_trajectory(mock_client, tmp_path, base_registry):
     runs_dir = tmp_path / "runs"
-    registry = ToolRegistry(workdir=tmp_path)
     # 支持可选显式覆盖 runs_dir 用于受控测试
     tool = SubAgentTool(client=mock_client, runs_dir=runs_dir)
-    registry.register_plugin(tool)
+    base_registry.register_plugin(tool)
 
     mock_client.chat_completion.return_value = LLMResponse(
         content="探查完毕",
@@ -193,7 +196,7 @@ async def test_subagent_parent_run_id_and_trajectory(mock_client, tmp_path):
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_subagent_contextvar_inheritance_and_compactor(mock_client, tmp_path):
+async def test_subagent_contextvar_inheritance_and_compactor(mock_client, tmp_path, base_registry):
     """
     验证：
     1. 子任务通过 current_run_id_var 自动无感获取主任务 run_id；
@@ -201,9 +204,8 @@ async def test_subagent_contextvar_inheritance_and_compactor(mock_client, tmp_pa
     3. 子任务触发超大工具输出时，Compactor L1 自动落盘至树状子目录 tool_outputs/。
     """
     runs_dir = tmp_path / "runs"
-    registry = ToolRegistry(workdir=tmp_path)
     tool = SubAgentTool(client=mock_client, runs_dir=runs_dir)
-    registry.register_plugin(tool)
+    base_registry.register_plugin(tool)
 
     # 创建一个 30,000 字符的真实大文件，由内置 read_file 工具读取，专门触发 Compactor L1 (阈值 20,000 字符)
     big_file = tmp_path / "big_data.txt"
@@ -233,7 +235,7 @@ async def test_subagent_contextvar_inheritance_and_compactor(mock_client, tmp_pa
     # 模拟主任务处于执行循环中，绑定了 current_run_id_var
     token = current_run_id_var.set(main_run_id)
     try:
-        result = await registry.execute("subagent", {"prompt": "提取大数据"})
+        result = await base_registry.execute("subagent", {"prompt": "提取大数据"})
         assert "大文件数据已成功提取完毕" in result
     finally:
         current_run_id_var.reset(token)

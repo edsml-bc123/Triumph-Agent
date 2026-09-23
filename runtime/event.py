@@ -172,32 +172,3 @@ class TrajectoryHook:
             )
 
 
-# ----------------------------------------------------------------------
-# 模块自测
-# ----------------------------------------------------------------------
-
-def _smoke_test():
-    import tempfile
-    print("启动 runtime/event.py 冒烟自测...")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        recorder = TrajectoryRecorder(run_id="test_run_001", runs_dir=Path(tmpdir))
-        recorder.record("TaskStart", user_prompt="测试任务", max_steps=10)
-        recorder.record("StepStart", step=1)
-        recorder.record("ToolExecution", tool_call_id="call_1", tool_name="bash", arguments={"command": "ls"}, output="file1 file2", duration_ms=15.3)
-        recorder.record("TaskEnd", status="success", total_steps=1, total_tokens=100, final_answer="完成")
-
-        assert recorder.file_path.exists()
-        assert recorder.file_path == Path(tmpdir).resolve() / "test_run_001" / "trajectory.jsonl"
-        lines = recorder.file_path.read_text(encoding="utf-8").strip().splitlines()
-        assert len(lines) == 4
-        first_event = json.loads(lines[0])
-        assert first_event["event_type"] == "TaskStart"
-        assert first_event["data"]["user_prompt"] == "测试任务"
-        print(f"轨迹文件生成成功: {len(lines)} 条事件已持久化落盘")
-
-    print("runtime/event.py 冒烟自测全部通过！")
-
-
-if __name__ == "__main__":
-    _smoke_test()
