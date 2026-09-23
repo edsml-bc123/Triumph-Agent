@@ -18,12 +18,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional
 
-if TYPE_CHECKING:
-    from client import LLMResponse
-    from runtime.hooks import HookManager
-    from runtime.state import AgentState
+from client import LLMResponse
+from runtime.hooks import HookManager
+from runtime.state import AgentState
 
 # 显式定义东八区时区 (UTC+8 / Asia/Shanghai)
 CST = timezone(timedelta(hours=8))

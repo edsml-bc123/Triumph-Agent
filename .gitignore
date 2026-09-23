@@ -47,3 +47,6 @@ ENV/
 .coverage
 .coverage.*
 htmlcov/
+
+# 本地技能内容目录 (忽略具体技能子目录，保留 skills 核心源码)
+skills/*/

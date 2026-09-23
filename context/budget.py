@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
-
 # 确保项目根目录在 sys.path 中
 _current_dir = Path(__file__).resolve().parent
 _root_dir = _current_dir.parent
@@ -25,10 +23,8 @@ if str(_root_dir) not in sys.path:
 
 from loguru import logger
 from client import LLMResponse
+from runtime.hooks import HookManager
 from runtime.state import AgentState
-
-if TYPE_CHECKING:
-    from runtime.hooks import HookManager
 
 
 class BudgetHook:

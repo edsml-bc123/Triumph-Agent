@@ -8,7 +8,7 @@ triumph-agent 工具注册表与安全执行分发器 (Tool Registry)
    - 专司工具 Schema 注册、安全路径边界校验与防御性分发派发。
 2. 统一插件装配契约 (Explicit Tool Plugin Protocol)：
    - 统一遵循 ToolPlugin 协议 (PEP 544 Protocol)；
-   - 外部通过 register_plugin 显式装配 BuiltinToolsPlugin、SubAgentTool、BackgroundTaskTool。
+   - 外部通过 register_plugin 显式装配 BuiltinTool、SubAgentTool、SkillTool 等。
 3. 极端边界防御 (Defensive Dispatching)：
    - 工具名不存在时防崩溃（捕获 KeyError 转化为自愈提示）；
    - 参数解包异常时防崩溃（捕获 TypeError 转化为参数错误提示）；

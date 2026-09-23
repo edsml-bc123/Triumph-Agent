@@ -17,7 +17,7 @@ import pytest
 from client import LLMResponse, ToolCall
 from orchestration import SubAgentTool
 from runtime.state import current_run_id_var
-from tools import BuiltinToolsPlugin, ToolRegistry
+from tools import BuiltinTool, ToolRegistry
 
 
 @pytest.fixture
@@ -31,9 +31,9 @@ def mock_client():
 
 @pytest.fixture
 def base_registry(tmp_path):
-    """标准测试夹具：预装配 BuiltinToolsPlugin 的干净工具注册表"""
+    """标准测试夹具：预装配 BuiltinTool 的干净工具注册表"""
     reg = ToolRegistry(workdir=tmp_path)
-    reg.register_plugin(BuiltinToolsPlugin(workdir=tmp_path))
+    reg.register_plugin(BuiltinTool(workdir=tmp_path))
     return reg
 
 

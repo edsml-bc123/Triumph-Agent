@@ -17,7 +17,7 @@ from client import LLMResponse, ToolCall
 from runtime.hooks import HookManager
 from runtime.loop import AgentLoop
 from runtime.state import AgentState, AgentStatus
-from tools import BuiltinToolsPlugin, ToolRegistry
+from tools import BuiltinTool, ToolRegistry
 
 
 @pytest.fixture
@@ -33,7 +33,7 @@ def mock_client():
 def env(tmp_path):
     """标准测试基础设施：纯净注册表 + 内置基础工具 + 空白钩子总线"""
     registry = ToolRegistry(workdir=tmp_path)
-    registry.register_plugin(BuiltinToolsPlugin(workdir=tmp_path))
+    registry.register_plugin(BuiltinTool(workdir=tmp_path))
     hooks = HookManager()
     return tmp_path, registry, hooks
 

@@ -48,14 +48,15 @@ from runtime import (
     read_terminal_input,
 )
 from security import PermissionHook
-from tools import BuiltinToolsPlugin, ToolRegistry
+from skills import SkillLoader, SkillTool
+from tools import BuiltinTool, ToolRegistry
 
 
 def print_banner(session: SessionContext):
     banner = (
         "\n" + "=" * 68 + "\n"
         "  triumph-agent v0.2 (Mini Coding Agent Runtime)\n"
-        "  基于阿里云百炼原生协议 + 显式状态机 + 权限审计 + 预算熔断 + 渐进式压缩 + 三层记忆\n"
+        "  基于阿里云百炼原生协议 + 显式状态机 + 权限审计 + 预算熔断 + 渐进式压缩 + 三层记忆 + 技能加载\n"
         + "=" * 68 + "\n"
         f"  [当前会话 ID]: {session.session_id}\n"
         f"  [会话任务看板]: {session.tasks_dir.relative_to(session.workdir)}\n"
@@ -65,6 +66,7 @@ def print_banner(session: SessionContext):
         "提示: 支持自动派生子智能体 (subagent) 隔离处理复杂子探索。\n"
         "提示: 支持 DAG 拓扑多任务拆解编排 (create_task / claim_task / list_tasks)。\n"
         "提示: 支持后台异步作业托管 (run_in_background + list_jobs)。\n"
+        "提示: 支持专业技能渐进式按需加载 (load_skill)。\n"
         "提示: 输入 /clear 重置会话上下文并开启全新 Session 空间。\n"
         "提示: 输入 /memory 查看当前持久化知识库目录。\n"
         "提示: 输入 q 或 exit 退出程序。\n"
@@ -82,6 +84,7 @@ async def main():
         registry = ToolRegistry(workdir=workdir)
         job_manager = JobManager(workdir=workdir, runs_dir=session.runs_dir)
         task_store = TaskStore(workdir=workdir, tasks_dir=session.tasks_dir)
+        skill_loader = SkillLoader(skills_dir=workdir / "skills")
 
         # 工业级生产梯度参数
         compactor_cfg = CompactionConfig(
@@ -94,11 +97,11 @@ async def main():
         )
         compactor = ContextCompactor(workdir=workdir, config=compactor_cfg, base_runs_dir=session.runs_dir)
 
-        # 显式装配基础工具、后台作业管控、DAG 拓扑编排、子智能体与主动上下文压缩插件 (ToolPlugin 协议)
-        registry.register_plugin(BuiltinToolsPlugin(workdir=workdir, job_manager=job_manager))
+        registry.register_plugin(BuiltinTool(workdir=workdir, job_manager=job_manager))
         registry.register_plugin(JobTool(manager=job_manager))
         registry.register_plugin(DAGTaskTool(store=task_store))
         registry.register_plugin(SubAgentTool(client=client))
+        registry.register_plugin(SkillTool(loader=skill_loader))
         registry.register_plugin(CompactTool(compactor=compactor, client=client))
 
         memory_mgr = MemoryManager(workdir=workdir)
@@ -111,7 +114,12 @@ async def main():
         hooks.register_plugin(MemoryHook(manager=memory_mgr, client=client))
         hooks.register_plugin(JobHook(manager=job_manager))
 
-        loop_engine = AgentLoop(client=client, registry=registry, hooks=hooks)
+        loop_engine = AgentLoop(
+            client=client,
+            registry=registry,
+            hooks=hooks,
+            skill_loader=skill_loader,
+        )
 
         # 外层会话循环 (Outer Loop) - 维护连续的多轮会话历史 (Session Context)
         session_messages: list[dict] = []

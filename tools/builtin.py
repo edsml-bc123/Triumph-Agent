@@ -19,14 +19,15 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
+from .registry import ToolRegistry
+
 if TYPE_CHECKING:
     from orchestration.job import JobManager
-    from tools.registry import ToolRegistry
 
 
-class BuiltinToolsPlugin:
+class BuiltinTool:
     """
-    内置原子工具插件 (符合 ToolPlugin 协议契约)
+    内置原子工具 (符合 ToolPlugin 协议契约)
     提供原生融合的 bash 以及文件沙箱原子工具。
     """
 
@@ -157,7 +158,7 @@ class BuiltinToolsPlugin:
             except Exception as e:
                 return f"Error running glob: {e}"
 
-        return [
+        specs = [
             (
                 "bash",
                 "在工作区安全执行终端命令（支持 pip/pytest/git 等常用命令；支持 run_in_background 后台长任务模式）",
@@ -227,3 +228,5 @@ class BuiltinToolsPlugin:
                 run_glob,
             ),
         ]
+
+        return specs

@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 import pytest
 
-from tools import BuiltinToolsPlugin, ToolRegistry
+from tools import BuiltinTool, ToolRegistry
 
 
 @pytest.fixture
@@ -26,9 +26,9 @@ def temp_workspace():
 
 @pytest.fixture
 def registry(temp_workspace):
-    """标准测试夹具：预装配 BuiltinToolsPlugin 的纯净注册表"""
+    """标准测试夹具：预装配 BuiltinTool 的纯净注册表"""
     reg = ToolRegistry(workdir=temp_workspace)
-    reg.register_plugin(BuiltinToolsPlugin(workdir=temp_workspace))
+    reg.register_plugin(BuiltinTool(workdir=temp_workspace))
     return reg
 
 

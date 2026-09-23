@@ -9,11 +9,11 @@
 ## 目录
 - [一、 战略愿景与核心学习方法论](#一-战略愿景与核心学习方法论)
 - [二、 知识基底：learn-claude-code 全 17 章节核心技术全景](#二-知识基底learn-claude-code-全-17-章节核心技术全景)
-- [三、 动手实战：triumph-agent 自研运行时 5 阶段演进计划](#三-动手实战triumph-agent-自研运行时-5-阶段演进计划)
+- [三、 动手实战：triumph-agent 自研运行时 7 阶段架构蓝图](#三-动手实战triumph-agent-自研运行时-7-阶段架构蓝图)
 - [四、 结对实操：如何利用 Coding Agent 保证 100% 学习效果？](#四-结对实操如何利用-coding-agent-保证-100-学习效果)
 - [五、 进阶升维：Pi 与 DeepSeek Harness 源码架构对比研究](#五-进阶升维pi-与-deepseek-harness-源码架构对比研究)
 - [六、 终局跃迁：Agent Engineering 与 Agent Infra 生产基建](#六-终局跃迁agent-engineering-与-agent-infra-生产基建)
-- [七、 阶段推进时间表与架构师行动座右铭](#七-阶段推进时间表与架构师行动座右铭)
+- [七、 架构演进全景矩阵与工程座右铭](#七-架构演进全景矩阵与工程座右铭)
 
 ---
 
@@ -26,9 +26,9 @@
 ### 2. 三步跃迁学习法
 ```text
  ┌───────────────────────────┐     ┌───────────────────────────┐     ┌───────────────────────────┐
- │   1. 拆解本质 (已完成)    │ ➔   │   2. 亲手造轮 (立即启动)  │ ➔   │   3. 架构对比 (进阶升维)  │
+ │   1. 拆解本质与理论体系   │ ➔   │   2. 自研核心运行时架构   │ ➔   │   3. 生产级对比与升维演进 │
  │  深度精读 learn-claude-code │     │  从零手写 triumph-agent   │     │  精读 Pi & DeepSeek Harness│
- │      (s01 ~ s17)          │     │    (v0.1 ~ v0.5 演进)     │     │      (做 Architecture Diff)│
+ │     (s01 ~ s17 机制提炼)   │     │      (V0 ~ V6 全栈演进)   │     │      (深度 Architecture Diff)│
  └───────────────────────────┘     └───────────────────────────┘     └───────────────────────────┘
 ```
 
@@ -60,7 +60,7 @@
 
 ---
 
-## 三、 动手实战：triumph-agent 自研运行时 5 阶段演进计划
+## 三、 动手实战：triumph-agent 自研运行时 7 阶段架构蓝图
 
 在当前目录 `triumph-agent/` 下，从零手写自己的开源级 Agent Runtime。**严禁引入任何第三方 Agent 框架（如 LangChain）**，全面基于 **阿里云百炼（DashScope）OpenAI 兼容协议（`openai` SDK + `asyncio` + `pydantic`）** 构建。
 
@@ -85,56 +85,80 @@
 ### 目录结构规划
 ```text
 triumph-agent/
-├── runtime/          # 核心执行引擎 (Loop, State, Event, Dispatcher)
-├── context/          # 上下文生命周期与压缩引擎 (Budget, Compactor, Tokenizer)
-├── tools/            # 工具协议与安全沙箱 (Registry, Bash, FileSystem, Git)
+├── runtime/          # 核心执行引擎 (Loop, State, Event, Session, Terminal)
+├── context/          # 上下文生命周期与预算压缩 (Budget, Compactor, Tokenizer)
+├── tools/            # 工具协议与基础原子工具集 (Registry, Builtin)
 ├── security/         # 权限审计与策略引擎 (Permission, Sandbox, DenyList)
-├── memory/           # 三层记忆系统 (Working, Session, LongTerm)
-├── orchestration/    # 多智能体与编排系统 (Subagent, Team, DAG, Worktree)
+├── memory/           # 三层记忆系统 (Working, Session, LongTerm, Storage)
+├── skills/           # 技能按需渐进式加载系统 (SkillLoader, Discovery, Spec)
+├── mcp/              # 模型上下文协议客户端 (MCP Client, JSON-RPC, StdioTransport)
+├── orchestration/    # 多智能体协同与编排系统 (Subagent, DAG, Job, Cron, Team, Worktree)
 ├── workflow/         # 确定性工作流与断点恢复 (Journal, Schema, Operators)
 ├── goal/             # 目标驱动闭环与裁判拦截 (Evaluator, StopHook)
 ├── client.py         # 阿里云百炼 API 客户端封装 (OpenAI 兼容模式)
-└── main.py           # CLI 交互入口
+└── main.py           # CLI 终端交互入口
 ```
 
 ### 演进阶段实施清单：
 
-#### 🔹 阶段 1：V0 Mini Agent（3~5 天）—— 核心骨架搭建
-* **目标**：用 < 300 行 Python 跑通基于阿里云 API 的自主 ReAct 循环；
-* **核心模块**：
-  1. `client.py`：基于 `AsyncOpenAI(base_url="https://dashscope.aliyuncs.com/compatible-mode/v1", api_key=os.getenv("DASHSCOPE_API_KEY"))` 封装通用调用接口；
-  2. `runtime/loop.py`：实现 `while True`，处理阿里云返回的 `tool_calls` ➔ 执行本地 handler ➔ 回填 `tool` 角色消息 ➔ 无工具调用时退出；
-  3. `tools/registry.py`：编写 `read_file`、`write_file`、`bash`（带 120s 超时和 30KB 截断）；
-  4. `runtime/state.py`：设计显式状态类 `AgentState(messages, total_tokens, status)`；
-  5. `runtime/event.py`：落盘追加写 `runs/{timestamp}.jsonl` 记录每一步 Trajectory。
+#### 🔹 阶段 1：V0 Mini Agent 核心骨架 (Minimal Agent Kernel)
+* **核心目标**：用原生 Python 跑通基于阿里云百炼 API 的自主 ReAct 闭环；
+* **对标章节**：`s01_agent_loop`, `s02_tool_use`；
+* **核心模块与契约**：
+  1. `client.py`：基于 `AsyncOpenAI` 封装百炼兼容模式通信层，统一流式响应与 Token 计量；
+  2. `runtime/loop.py`：实现核心 ReAct `while True` 调度，驱动模型推理、工具批处理派发与状态跃迁；
+  3. `tools/registry.py`：构建纯白板工具容器，提供标准 JSON Schema 注册与执行分发派发；
+  4. `runtime/state.py`：设计显式状态机契约 `AgentState(messages, total_tokens, status)`；
+  5. `runtime/event.py`：实现流水日志追加器，记录单步审计轨迹。
 
-#### 🔹 阶段 2：V1 Safe & Observable Harness（1 周）—— 权限与切面
-* **目标**：打造具备工业级安全审计与事件拦截的健壮底座；
-* **核心模块**：
-  1. `security/permission.py`：实现 `Auto / Ask / Deny` 策略；加入危险命令正则与目录穿越防逃逸沙箱；
-  2. `runtime/hooks.py`：设计 `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` 钩子拦截体系；
-  3. `context/budget.py`：引入 Token 预算硬上限管控。
+#### 🔹 阶段 2：V1 安全审计与切面拦截 (Safe & Observable Harness)
+* **核心目标**：打造具备工业级零信任安全审计与事件拦截的健壮底座；
+* **对标章节**：`s03_permission`, `s04_hooks`；
+* **核心模块与契约**：
+  1. `security/permission.py`：实现 `Auto / Ask / Deny` 策略决策引擎，内置高危正则与路径防越权沙箱；
+  2. `runtime/hooks.py`：设计统一生命周期切面事件总线（AOP），支持 `UserPromptSubmit`, `StepStart`, `LLMResponse`, `PreToolUse`, `PostToolUse`, `Stop`；
+  3. `context/budget.py`：引入 Token 预算硬上限与渐进式熔断控制器。
 
-#### 🔹 阶段 3：V2 Context & Memory Operating Engine（1 周）—— 上下文管理
-* **目标**：解决长上下文爆炸与跨会话记忆留存；
-* **核心模块**：
-  1. `context/compactor.py`：实现 5 层渐进式压缩流水线（剔除历史 Tool 细节、语义摘要合并、保留最近轮次）；
-  2. `memory/manager.py`：实现 Working / Session / Long-term 三层记忆持久化与按需注入。
+#### 🔹 阶段 3：V2 上下文压缩、长期记忆与技能动态按需加载 (Context, Memory & Skill Engine)
+* **核心目标**：解决长上下文爆炸、跨会话偏好留存以及 System Prompt 知识膨胀；
+* **对标章节**：`s08_context_compact`, `s09_memory`, `s07_skill_loading`；
+* **核心模块与契约**：
+  1. `context/compactor.py`：实现 5 层渐进式压缩流水线（超长输出剪裁、转折点对齐、微修剪、贪心装箱、LLM 语义摘要）；
+  2. `memory/`：实现 Working / Session / Long-term 三层记忆体系，提供模型事实提炼与跨会话持久化存储；
+  3. `skills/`：实现渐进式技能加载体系，初始化只在 System Prompt 注入技能名与一句话摘要元数据，模型需要时通过 `view_file` 按需读取完整指令。
 
-#### 🔹 阶段 4：V3 Multi-Agent & Orchestration System（2 周）—— 多智能体并发
-* **目标**：实现物理级安全的多任务并发与团队协作；
-* **核心模块**：
-  1. `orchestration/subagent.py`：Subagent 纯净上下文派生与防污染机制；
-  2. `orchestration/dag.py`：有向无环图任务依赖调度与看板；
-  3. `orchestration/worktree.py`：Git Worktree 物理独立工作区隔离；
-  4. `runtime/background.py`：异步后台任务守护与主动唤醒。
+#### 🔹 阶段 4：V3 异步调度、拓扑编排与外部生态 (Async, Orchestration & MCP Ecosystem)
+* **核心目标**：解决长命令挂起阻塞、多任务前后依赖死锁以及第三方工具生态接入；
+* **对标章节**：`s10_task_system`, `s11_background_tasks`, `s12_cron_scheduler`, `s14_mcp_plugin`；
+* **核心模块与契约**：
+  1. `runtime/session.py`：引入 Session 一等公民作用域，规范 `.sessions/{session_id}/` 下 `tasks/` 与 `runs/` 拓扑隔离；
+  2. `orchestration/dag.py`：实现有向无环图任务看板系统，遵循“先创节点、后连依赖”两阶段协议，内建 DFS 环路检测与就绪解锁计算；
+  3. `orchestration/job.py`：实现后台长命令独立进程组托管，提供专属隔离日志流与退出主动唤醒机制；
+  4. `orchestration/cron.py`：实现标准 5 字段 Cron 定时调度与心跳保活引擎，支持两阶段 ACK 确认；
+  5. `mcp/`：实现标准 Model Context Protocol 客户端，通过 JSON-RPC 跨进程 STDIO 动态挂载外部生态工具集。
 
-#### 🔹 阶段 5：V4 Deterministic Workflow & Goal Loop（1~2 周）—— 终极闭环
-* **目标**：融合确定性断点续跑与目标驱动自愈；
-* **核心模块**：
-  1. `workflow/journal.py`：基于 SHA-256 语义 Hash 的 JSONL 日志断点恢复系统（Resume 零 Token 开销）；
-  2. `workflow/schema.py`：纯手写递归 JSON Schema 校验与容错提取器；
-  3. `goal/evaluator.py`：基于阿里云 `qwen-turbo` 的独立裁判小模型与 Stop 边界 6 大裁决拦截器。
+#### 🔹 阶段 5：V4 多智能体战队与物理环境隔离 (Multi-Agent Teams & Worktree)
+* **核心目标**：解决复杂子探索污染主上下文以及多 Agent 并发写代码时的 Git 冲突与代码踩踏；
+* **对标章节**：`s06_subagent`, `s13_agent_teams`；
+* **核心模块与契约**：
+  1. `orchestration/subagent.py`：实现 Subagent 纯净上下文派生、工具集权限收敛与结果摘要回填；
+  2. `orchestration/worktree.py`：基于 Git Worktree 为并发智能体派生物理级独立工作区，杜绝文件读写冲突；
+  3. `orchestration/team.py`：建立多 Agent 异步邮箱通讯总线（MessageBus）与方案审批门禁（Plan Gate）。
+
+#### 🔹 阶段 6：V5 确定性工作流与目标闭环 (Deterministic Workflow & Goal Loop)
+* **核心目标**：解决复杂业务不可控不可重放、模型盲目自信与口头宣布胜利的顽疾；
+* **对标章节**：`s16_workflow_runtime`, `s17_goal_loop`；
+* **核心模块与契约**：
+  1. `workflow/journal.py`：基于 SHA-256 语义 Hash 的轻量级执行日志断点恢复系统，实现零 Token 重放；
+  2. `workflow/schema.py`：实现递归式 JSON Schema 强类型校验与容错提取器；
+  3. `goal/evaluator.py`：引入 Worker + Evaluator 双模型分工架构，在 `Stop` 边界执行 6 大裁决拦截，不见铁证绝不放行。
+
+#### 🔹 阶段 7：V6 终极集成操作系统 (Integrated Agent Operating System)
+* **核心目标**：将所有异构子系统融合成高内聚、高并发、抗死锁的完整 Agent OS；
+* **对标章节**：`s15_integrated_harness`；
+* **核心模块与契约**：
+  1. `runtime/engine.py`：实现多线程事件循环与控制台交互解耦，支持后台长时常驻；
+  2. 全局并发锁拓扑规范：统筹管理 `agent_lock`, `team_lock`, `dag_lock`, `job_lock`, `store_lock`，杜绝多任务并发死锁。
 
 ---
 
@@ -249,17 +273,17 @@ triumph-agent/
 
 ---
 
-## 七、 阶段推进时间表与架构师行动座右铭
+## 七、 架构演进全景矩阵与工程座右铭
 
-| 阶段 | 周期 | 核心交付物 | 达成标志 |
-| :--- | :---: | :--- | :--- |
-| **阶段 1：V0 Mini Agent** | Day 1 ~ 4 | `loop.py`, `tools/`, `main.py` | 纯 Python 实现无框架自主修复单测 |
-| **阶段 2：V1 Safe Harness** | Week 2 | `permission/`, `hooks/`, `budget/` | 拦截危险指令、完备的 Trajectory 日志 |
-| **阶段 3：V2 Context & Memory** | Week 3 | `compactor/`, `memory/` | 200k 超长对话自适应压缩不失忆 |
-| **阶段 4：V3 Multi-Agent** | Week 4 ~ 5 | `subagent/`, `dag/`, `worktree/` | 多任务 Git 物理隔离并发协同 |
-| **阶段 5：V4 Deterministic** | Week 6 ~ 7 | `workflow/`, `goal/` | 代码化流水线断点续跑 + 裁判拦截自愈 |
-| **阶段 6：Pi & DSH 源码精研** | Week 8 ~ 9 | 产出架构对比技术白皮书 | 彻底吃透成熟 Harness 设计精髓 |
-| **阶段 7：Agent Infra 服务化** | Week 10+ | 生产级 Agent Server & Sandbox | 具备企业级 Agent 平台架构设计能力 |
+| 演进阶段 | 架构定位 | 核心模块组件 | 关键系统机制与验收基准 |
+| :--- | :--- | :--- | :--- |
+| **阶段 1：V0 Mini Agent 核心骨架** | Minimal Agent Kernel | `runtime/loop.py`<br>`tools/registry.py`<br>`client.py` | 纯 Python 实现双循环驱动（外部会话+内部 ReAct），支持模型推理与工具标准协议分发 |
+| **阶段 2：V1 安全审计与切面拦截** | Safe & Observable Harness | `security/permission.py`<br>`runtime/hooks.py`<br>`context/budget.py` | 零信任权限决策（Auto/Ask/Deny）、全生命周期 AOP 事件切面拦截与 Token 预算熔断 |
+| **阶段 3：V2 上下文压缩、长期记忆与技能动态按需加载** | Context, Memory & Skill Engine | `context/compactor.py`<br>`memory/`<br>`skills/` | 5 层渐进式上下文自适应压缩、三层记忆持久化存储与基于元数据摘要的 Skill 渐进式按需读取 |
+| **阶段 4：V3 异步调度、拓扑编排与外部生态** | Async, Orchestration & MCP Ecosystem | `runtime/session.py`<br>`orchestration/dag.py`<br>`orchestration/job.py`<br>`orchestration/cron.py`<br>`mcp/` | Session 作用域拓扑隔离、两阶段契约 DAG 看板与环路检测、长命令独立进程组托管、Cron 两阶段 ACK 与 MCP 插件集成 |
+| **阶段 5：V4 多智能体战队与物理环境隔离** | Multi-Agent Teams & Worktree | `orchestration/subagent.py`<br>`orchestration/worktree.py`<br>`orchestration/team.py` | 子智能体纯净上下文派生、基于 Git Worktree 的物理独立工作区隔离、MessageBus 邮箱异步通讯与 Plan Gate 审批 |
+| **阶段 6：V5 确定性工作流与目标闭环** | Deterministic Workflow & Goal Loop | `workflow/journal.py`<br>`workflow/schema.py`<br>`goal/evaluator.py` | 基于 SHA-256 语义 Hash 的代码化执行日志断点恢复（零 Token 重放）、Schema 强类型校验与 Worker+Evaluator 双模型判别拦截 |
+| **阶段 7：V6 终极集成操作系统** | Integrated Agent Operating System | `runtime/engine.py`<br>全局并发锁拓扑规范 | 多线程事件循环与控制台交互完全解耦，全局并发锁拓扑（`agent_lock`, `team_lock`, `dag_lock` 等）严谨防死锁 |
 
 ---
 

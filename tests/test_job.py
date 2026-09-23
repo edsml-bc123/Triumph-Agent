@@ -25,7 +25,7 @@ from orchestration.job import (
 )
 from runtime.hooks import HookManager
 from runtime.state import AgentState
-from tools import BuiltinToolsPlugin, ToolRegistry
+from tools import BuiltinTool, ToolRegistry
 
 
 @pytest.fixture
@@ -167,7 +167,7 @@ async def test_tool_registry_job_and_dag_no_collision(temp_env):
     """
     workdir, runs_dir, manager = temp_env
     registry = ToolRegistry(workdir=workdir)
-    registry.register_plugin(BuiltinToolsPlugin(workdir=workdir, job_manager=manager))
+    registry.register_plugin(BuiltinTool(workdir=workdir, job_manager=manager))
 
     # 装配后台作业工具插件
     job_plugin = JobTool(manager=manager)

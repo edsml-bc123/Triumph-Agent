@@ -12,6 +12,8 @@ triumph-agent 核心执行循环引擎 (Agent Loop)
    以 state.is_terminal 作为唯一生命周期守卫，彻底消灭死循环。
 """
 
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 from typing import Optional
@@ -28,6 +30,7 @@ from loguru import logger
 from client import DashScopeClient
 from runtime.hooks import HookManager
 from runtime.state import AgentState, current_run_id_var, current_state_var
+from skills.loader import SkillLoader
 from tools import ToolRegistry
 # ----------------------------------------------------------------------
 # AgentLoop 核心执行引擎
@@ -45,14 +48,16 @@ class AgentLoop:
         client: DashScopeClient,
         hooks: HookManager,
         system_prompt: Optional[str] = None,
+        skill_loader: Optional[SkillLoader] = None,
     ):
         self.registry = registry
         self.client = client
         self.hooks = hooks
+        self.skill_loader = skill_loader
         self.system_prompt = system_prompt or self._default_system_prompt()
 
     def _default_system_prompt(self) -> str:
-        return (
+        prompt = (
             f"你是一个拥有自主代码编写和系统操作能力的 Coding Agent，当前工作目录是: {self.registry.workdir}。\n"
             "你可以使用系统提供的全套工具来分析和解决工程问题。\n"
             "工作原则：\n"
@@ -64,6 +69,13 @@ class AgentLoop:
             "5. 探索隔离：面对独立的复杂子问题或开放性探索时，使用 subagent 派生子智能体在干净上下文中完成；\n"
             "6. 任务闭环：所有步骤达成后，给出清晰扼要的总结。"
         )
+        if self.skill_loader and self.skill_loader.skills:
+            catalog = self.skill_loader.catalog()
+            prompt += (
+                f"\n\n可用专业技能库 (Skills):\n{catalog}\n"
+                "当任务涉及上述领域时，使用 load_skill(name=...) 读取该技能的详细执行规范和指引。"
+            )
+        return prompt
 
     async def run(self, state: AgentState) -> AgentState:
         """

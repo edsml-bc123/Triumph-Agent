@@ -433,7 +433,7 @@ async def test_agent_loop_with_compactor_hook_end_to_end(tmp_path):
     from runtime.loop import AgentLoop
     from runtime.state import AgentState, AgentStatus
     from runtime.hooks import HookManager
-    from tools import BuiltinToolsPlugin, ToolRegistry
+    from tools import BuiltinTool, ToolRegistry
 
     step_counter = 0
 
@@ -464,7 +464,7 @@ async def test_agent_loop_with_compactor_hook_end_to_end(tmp_path):
     hooks.register_plugin(compactor_hook)
 
     registry = ToolRegistry(workdir=workdir)
-    registry.register_plugin(BuiltinToolsPlugin(workdir=workdir))
+    registry.register_plugin(BuiltinTool(workdir=workdir))
     loop = AgentLoop(client=DualStepClient(), registry=registry, hooks=hooks)
 
     state = AgentState(run_id="run_loop_compactor_e2e")
