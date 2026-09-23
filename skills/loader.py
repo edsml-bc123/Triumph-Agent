@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Sequence, Union
 
 import yaml
 
@@ -155,10 +155,6 @@ class SkillLoader:
 
         available = ", ".join(sorted(self.skills.keys())) or "none"
         return f"Error: Unknown skill '{name}'. Available skills: {available}"
-
-    def get_skill(self, name: str) -> Optional[SkillSpec]:
-        """获取技能规范对象"""
-        return self.skills.get(name.strip())
 
 
 class SkillTool:
