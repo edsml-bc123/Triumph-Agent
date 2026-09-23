@@ -27,7 +27,7 @@ from loguru import logger
 
 from client import DashScopeClient
 from runtime.hooks import HookManager
-from runtime.state import AgentState, current_run_id_var
+from runtime.state import AgentState, current_run_id_var, current_state_var
 from tools import ToolRegistry
 # ----------------------------------------------------------------------
 # AgentLoop 核心执行引擎
@@ -72,8 +72,9 @@ class AgentLoop:
         if not any(m.get("role") == "system" for m in state.messages):
             state.messages.insert(0, {"role": "system", "content": self.system_prompt})
 
-        # 绑定当前异步协程级任务 ID 上下文 (Ambient Context)
-        token = current_run_id_var.set(state.run_id)
+        # 绑定当前异步协程级任务 ID 与状态机上下文 (Ambient Context)
+        run_id_token = current_run_id_var.set(state.run_id)
+        state_token = current_state_var.set(state)
 
         try:
             # 提取用户当前最新 prompt 并触发 UserPromptSubmit 切面
@@ -200,7 +201,9 @@ class AgentLoop:
                 # 无论正常退出、切面熔断还是致命崩溃，100% 触发 Stop 终态切面，确保黑匣子 TaskEnd 必然落盘
                 await self.hooks.trigger("Stop", state=state)
             finally:
-                current_run_id_var.reset(token)
+                current_run_id_var.reset(run_id_token)
+                current_state_var.reset(state_token)
+
 
         return state
 

@@ -28,7 +28,7 @@ except ImportError:
     pass
 
 from client import DashScopeClient
-from context import BudgetHook, CompactorHook, ContextCompactor, CompactionConfig
+from context import BudgetHook, CompactorHook, ContextCompactor, CompactionConfig, CompactTool
 from memory import MemoryHook, MemoryManager
 from orchestration import (
     BackgroundTaskHook,
@@ -66,12 +66,6 @@ async def main():
         registry = ToolRegistry(workdir=workdir)
         bg_manager = BackgroundTaskManager(workdir=workdir, runs_dir=workdir / "runs")
 
-        # 显式装配基础工具（注入后台调度器，终极融合 bash）、后台管控工具及子智能体
-        registry.register_plugin(BuiltinToolsPlugin(workdir=workdir, bg_manager=bg_manager))
-        registry.register_plugin(BackgroundTaskTool(manager=bg_manager))
-        registry.register_plugin(SubAgentTool(client=client))
-
-        # 显式初始化生命周期钩子总线并挂载切面插件 (统一插件装配协议)
         # 工业级生产梯度参数：
         # - L1: 单工具输出 >20,000 字符自动落盘截断并保留 1200 字符预览
         # - L2: 对话历史 >30 条消息自动执行中段成对归档
@@ -87,6 +81,13 @@ async def main():
             hard_threshold_chars=80_000,
         )
         compactor = ContextCompactor(workdir=workdir, config=compactor_cfg)
+
+        # 显式装配基础工具、后台管控、子智能体与主动上下文压缩插件 (ToolPlugin 协议)
+        registry.register_plugin(BuiltinToolsPlugin(workdir=workdir, bg_manager=bg_manager))
+        registry.register_plugin(BackgroundTaskTool(manager=bg_manager))
+        registry.register_plugin(SubAgentTool(client=client))
+        registry.register_plugin(CompactTool(compactor=compactor, client=client))
+
         memory_mgr = MemoryManager(workdir=workdir)
 
         hooks = HookManager()

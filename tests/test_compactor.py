@@ -17,6 +17,9 @@ import pytest
 from context.compactor import CompactionConfig, CompactorHook, ContextCompactor
 from runtime.hooks import HookManager
 from runtime.state import AgentState
+from client import DashScopeClient, LLMResponse
+from tools import ToolRegistry
+
 
 
 def test_compactor_estimate_chars_and_tokens(tmp_path):
@@ -487,3 +490,75 @@ async def test_agent_loop_with_compactor_hook_end_to_end(tmp_path):
     tool_msg = next(m for m in final_state.messages if m.get("tool_call_id") == "call_loop_01")
     assert "<persisted-output>" in tool_msg["content"]
     assert "Preview (first 50 chars):" in tool_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_compact_tool_registration_and_spec(tmp_path):
+    """验证 CompactTool 遵循 ToolPlugin 契约规范并成功注册 Spec"""
+    from context.compactor import CompactTool
+
+    workdir = tmp_path
+    reg = ToolRegistry(workdir=workdir)
+    compactor = ContextCompactor(workdir=workdir)
+    compact_tool = CompactTool(compactor=compactor)
+
+    reg.register_plugin(compact_tool)
+
+    specs = reg.get_tools_spec()
+    tool_names = [s["function"]["name"] for s in specs]
+    assert "compact_context" in tool_names
+
+    compact_spec = next(s for s in specs if s["function"]["name"] == "compact_context")
+    assert "focus" in compact_spec["function"]["parameters"]["properties"]
+
+
+@pytest.mark.asyncio
+async def test_compact_tool_active_execution(tmp_path, mocker):
+    """验证大模型主动调用 compact_context 工具，就地浓缩 state.messages 并归档 transcript"""
+    from context.compactor import CompactTool
+    from runtime.state import current_state_var, current_run_id_var
+
+    workdir = tmp_path
+    compactor = ContextCompactor(workdir=workdir)
+
+    mock_client = mocker.AsyncMock(spec=DashScopeClient)
+    mock_client.chat_completion.return_value = LLMResponse(
+        content="## 精炼事实摘要\n- 完成代码重构\n- 测试已通过",
+        finish_reason="stop",
+    )
+
+    tool = CompactTool(compactor=compactor, client=mock_client)
+
+    # 模拟一个拥有 10 条历史的 AgentState
+    state = AgentState(run_id="run_compact_tool_test")
+    state.add_user_message("初始任务")
+    for i in range(4):
+        state.add_assistant_turn(LLMResponse(content=f"思考过程 {i}", finish_reason="stop"))
+        state.add_user_message(f"继续步骤 {i}")
+
+    assert len(state.messages) == 9
+
+    # 模拟协程上下文绑定
+    state_token = current_state_var.set(state)
+    run_token = current_run_id_var.set(state.run_id)
+
+    try:
+        # 执行工具调用
+        res = await tool.run(focus="重点保留测试通过的事实")
+
+        assert "上下文压缩成功" in res
+        assert "重点保留聚焦: 重点保留测试通过的事实" in res
+
+        # 验证 state.messages 已被浓缩（不再是 9 条，而是重构成系统+单条精炼消息）
+        assert len(state.messages) < 9
+        assert "[Conversation Compressed]" in state.messages[-1]["content"]
+        assert "重点保留测试通过的事实" in state.messages[-1]["content"]
+
+        # 验证全量历史 transcript 已落盘
+        transcript_files = list((workdir / "runs" / "run_compact_tool_test" / "transcripts").glob("*.jsonl"))
+        assert len(transcript_files) == 1
+
+    finally:
+        current_state_var.reset(state_token)
+        current_run_id_var.reset(run_token)
+

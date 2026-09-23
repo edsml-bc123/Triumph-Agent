@@ -532,3 +532,93 @@ class CompactorHook:
         )
 
 
+class CompactTool:
+    """
+    主动上下文压缩工具插件 (对标 learn-claude-code s08_context_compact)
+    向大模型暴露 compact_context 工具，允许大模型在完成阶段性目标、排查完毕或准备开启新阶段时，
+    主动发出指令浓缩历史记忆，释放上下文空间并巩固核心事实。
+    """
+
+    name = "compact_context"
+    description = (
+        "主动浓缩当前对话上下文。当排查完成、测试通过或阶段性目标达成后，调用此工具将冗长历史"
+        "（如中间密集的代码探索输出、试错过程）折叠压缩为高密度事实摘要，释放上下文窗口并防止遗忘核心决策。"
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "focus": {
+                "type": "string",
+                "description": "本次压缩需要重点保留的核心事实、架构决策或下一步行动指南（如：'已定位Bug在第42行，保留修复思路，折叠此前所有试错命令'）",
+            }
+        },
+    }
+
+    def __init__(
+        self,
+        compactor: Optional[ContextCompactor] = None,
+        client: Optional[DashScopeClient] = None,
+    ):
+        self.compactor = compactor or ContextCompactor()
+        self.client = client
+
+    def register_to(self, registry: Any) -> None:
+        """统一向 ToolRegistry 注册工具契约"""
+        registry.register(
+            name=self.name,
+            description=self.description,
+            parameters=self.parameters,
+            handler=self.run,
+        )
+
+    async def run(self, focus: str = "", **kwargs: Any) -> str:
+        """
+        物理执行主动上下文压缩：
+        1. 从协程级上下文变量 current_state_var 获取当前会话状态机；
+        2. 调用 Layer 5 (semantic_compact) 对全量历史生成精炼事实摘要并归档；
+        3. 就地重构 state.messages，使下一轮交互直接在精炼上下文中执行；
+        4. 回填成功的统计反馈。
+        """
+        from runtime.state import current_state_var, current_run_id_var
+
+        state = current_state_var.get()
+        if state is None:
+            return "Error: 当前执行环境中未找到活跃的 AgentState 状态机，无法执行上下文压缩。"
+
+        if not self.client:
+            return "Error: CompactTool 尚未注入有效的 DashScopeClient 客户端，无法调用大模型生成语义摘要。"
+
+        active_goal = focus.strip() or state.current_goal or "继续推进原定工程任务"
+        run_id = state.run_id or current_run_id_var.get()
+
+        old_msg_count = len(state.messages)
+        old_chars = self.compactor.estimate_chars(state.messages)
+
+        # 触发 Layer 5 全局语义摘要与全量历史归档
+        compacted_messages = await self.compactor.semantic_compact(
+            messages=state.messages,
+            client=self.client,
+            active_goal=active_goal,
+            run_id=run_id,
+        )
+
+        # 替换当前状态机内的历史消息
+        state.messages = compacted_messages
+        new_chars = self.compactor.estimate_chars(state.messages)
+        saved_chars = max(0, old_chars - new_chars)
+
+        logger.info(
+            f"[CompactTool] 主动上下文压缩成功: {old_msg_count} 条消息 -> {len(compacted_messages)} 条消息，"
+            f"释放约 {saved_chars} 字符空间。"
+        )
+
+        return (
+            f"上下文压缩成功！\n"
+            f"- 原始历史消息: {old_msg_count} 条 (~{old_chars} 字符)\n"
+            f"- 压缩后消息: {len(compacted_messages)} 条 (~{new_chars} 字符)\n"
+            f"- 释放空间: 约 {saved_chars} 字符\n"
+            f"- 重点保留聚焦: {active_goal}\n"
+            f"- 全量历史已安全归档至: runs/{run_id}/transcripts/\n"
+            f"当前上下文已精炼重置，请继续推进下一步行动。"
+        )
+
