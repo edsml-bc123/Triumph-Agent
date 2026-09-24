@@ -31,6 +31,9 @@ from client import DashScopeClient
 from context import BudgetHook, CompactorHook, ContextCompactor, CompactionConfig, CompactTool
 from memory import MemoryHook, MemoryManager
 from orchestration import (
+    CronHook,
+    CronScheduler,
+    CronTool,
     DAGTaskTool,
     JobHook,
     JobManager,
@@ -45,7 +48,7 @@ from runtime import (
     HookManager,
     SessionContext,
     TrajectoryHook,
-    read_terminal_input,
+    async_read_terminal_input,
 )
 from security import PermissionHook
 from mcp import MCPTool
@@ -99,6 +102,8 @@ async def main():
         )
         compactor = ContextCompactor(workdir=workdir, config=compactor_cfg, base_runs_dir=session.runs_dir)
 
+        cron_scheduler = CronScheduler(storage_path=session.session_dir / "crons.json")
+
         registry.register_plugin(BuiltinTool(workdir=workdir, job_manager=job_manager))
         registry.register_plugin(JobTool(manager=job_manager))
         registry.register_plugin(DAGTaskTool(store=task_store))
@@ -106,6 +111,7 @@ async def main():
         registry.register_plugin(SkillTool(loader=skill_loader))
         registry.register_plugin(MCPTool.from_config(workdir / "mcp.json", workdir=workdir))
         registry.register_plugin(CompactTool(compactor=compactor, client=client))
+        registry.register_plugin(CronTool(scheduler=cron_scheduler))
 
         memory_mgr = MemoryManager(workdir=workdir)
 
@@ -116,6 +122,7 @@ async def main():
         hooks.register_plugin(CompactorHook(compactor=compactor, client=client))
         hooks.register_plugin(MemoryHook(manager=memory_mgr, client=client))
         hooks.register_plugin(JobHook(manager=job_manager))
+        hooks.register_plugin(CronHook(scheduler=cron_scheduler))
 
         loop_engine = AgentLoop(
             client=client,
@@ -129,46 +136,63 @@ async def main():
 
         try:
             while True:
-                try:
-                    user_input = read_terminal_input("\ntriumph >> ")
-                except (EOFError, KeyboardInterrupt):
-                    logger.info("接收到中断信号，triumph-agent 正在安全退出。")
-                    break
+                # 异步可中断读取终端输入：每 50ms 让出一次 CPU，支持检测后台定时任务到期
+                user_input = await async_read_terminal_input(
+                    prompt="\ntriumph >> ",
+                    interrupt_check=cron_scheduler.has_pending_jobs,
+                )
 
-                if not user_input:
-                    continue
-
-                if user_input.lower() in ("q", "quit", "exit"):
-                    logger.info("用户主动退出，再见！")
-                    break
-
-                if user_input.lower() in ("/clear", "clear"):
-                    session_messages.clear()
-                    session.reset()
-                    # 重建 session 作用域下的 task_store，开启崭新看板
-                    task_store.tasks_dir = session.tasks_dir
-                    task_store.tasks_dir.mkdir(parents=True, exist_ok=True)
-                    print(f"\n[已重置并开启全新 Session 空间]: {session.session_id}")
-                    print(f"  [新任务看板]: {session.tasks_dir.relative_to(session.workdir)}")
-                    print(f"  [新轨迹目录]: {session.runs_dir.relative_to(session.workdir)}")
-                    continue
-
-                if user_input.lower() in ("/memory", "memory"):
-                    index_text = memory_mgr.storage.read_index()
-                    if index_text:
-                        print(f"\n[当前长期记忆目录]:\n{index_text}")
+                is_cron = False
+                if user_input is None:
+                    if cron_scheduler.has_pending_jobs():
+                        is_cron = True
+                        print("\n\n[定时任务自动唤醒] 检测到到期定时任务，立即自主执行...")
                     else:
-                        print("\n[当前长期记忆目录为空]")
-                    continue
+                        logger.info("接收到中断退出信号，triumph-agent 正在安全退出。")
+                        break
 
-                # 为当前任务初始化独立的 AgentState，并继承会话级多轮历史
+                if not is_cron:
+                    if not user_input.strip():
+                        continue
+
+                    if user_input.lower() in ("q", "quit", "exit"):
+                        logger.info("用户主动退出，再见！")
+                        break
+
+                    if user_input.lower() in ("/clear", "clear"):
+                        session_messages.clear()
+                        session.reset()
+                        # 重建 session 作用域下的 task_store，开启崭新看板
+                        task_store.tasks_dir = session.tasks_dir
+                        task_store.tasks_dir.mkdir(parents=True, exist_ok=True)
+                        print(f"\n[已重置并开启全新 Session 空间]: {session.session_id}")
+                        print(f"  [新任务看板]: {session.tasks_dir.relative_to(session.workdir)}")
+                        print(f"  [新轨迹目录]: {session.runs_dir.relative_to(session.workdir)}")
+                        continue
+
+                    if user_input.lower() in ("/memory", "memory"):
+                        index_text = memory_mgr.storage.read_index()
+                        if index_text:
+                            print(f"\n[当前长期记忆目录]:\n{index_text}")
+                        else:
+                            print("\n[当前长期记忆目录为空]")
+                        continue
+
+                # 统一执行链路：为当前任务初始化独立的 AgentState，继承多轮会话历史
                 state = AgentState(max_steps=20)
                 if session_messages:
                     state.messages.extend(session_messages)
-                state.add_user_message(user_input)
-                state.current_goal = user_input
 
-                logger.info("启动自主执行任务 | Run ID: {} | 携带历史上下文: {} 条消息", state.run_id, len(session_messages))
+                # 仅在必要时根据触发源定制目标与入参
+                if is_cron:
+                    state.current_goal = "执行已到期的定时调度任务"
+                    task_desc = "定时任务"
+                else:
+                    state.add_user_message(user_input)
+                    state.current_goal = user_input
+                    task_desc = "用户指令任务"
+
+                logger.info("启动{} | Run ID: {} | 携带历史上下文: {} 条消息", task_desc, state.run_id, len(session_messages))
                 start_time = asyncio.get_event_loop().time()
 
                 try:
@@ -185,7 +209,8 @@ async def main():
                     # 成功后将本轮产生的最新上下文平滑继承至会话历史中
                     session_messages = list(state.messages)
                     logger.success(
-                        "任务执行成功 | 步数: {} | 耗时: {:.2f}s | Token开销: {} | 当前会话上下文深度: {} 条",
+                        "{}执行成功 | 步数: {} | 耗时: {:.2f}s | Token开销: {} | 当前会话上下文深度: {} 条",
+                        task_desc,
                         state.step_count,
                         elapsed,
                         state.total_tokens,
@@ -193,7 +218,8 @@ async def main():
                     )
                 else:
                     logger.error(
-                        "任务执行中断/失败 | 状态: {} | 步数: {} | 错误: {}",
+                        "{}执行中断/失败 | 状态: {} | 步数: {} | 错误: {}",
+                        task_desc,
                         state.status.value,
                         state.step_count,
                         state.last_error,

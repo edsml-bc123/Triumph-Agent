@@ -8,9 +8,9 @@ from .event import TrajectoryRecorder, EventType, TrajectoryHook
 from .hooks import HookManager, HookPlugin
 from .session import SessionContext, current_session_id_var
 from .terminal import (
+    async_read_terminal_input,
     disable_bracketed_paste,
     enable_bracketed_paste,
-    read_terminal_input,
 )
 
 __all__ = [
@@ -28,6 +28,6 @@ __all__ = [
     "TrajectoryHook",
     "enable_bracketed_paste",
     "disable_bracketed_paste",
-    "read_terminal_input",
+    "async_read_terminal_input",
 ]
 
