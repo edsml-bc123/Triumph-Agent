@@ -679,9 +679,9 @@ async def test_tool_registry_lifecycle_close(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_live_system_server_stdio():
-    """测试真实的 mcp_servers/system_server.py 脚本通过 STDIO 管道的端到端调用"""
+    """测试真实的 mcp/servers/system_server.py 脚本通过 STDIO 管道的端到端调用"""
     project_root = Path(__file__).resolve().parent.parent
-    server_path = project_root / "mcp_servers" / "system_server.py"
+    server_path = project_root / "mcp" / "servers" / "system_server.py"
     assert server_path.exists()
 
     transport = StdioTransport(
