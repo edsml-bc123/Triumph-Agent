@@ -48,6 +48,7 @@ from runtime import (
     read_terminal_input,
 )
 from security import PermissionHook
+from mcp import MCPTool
 from skills import SkillLoader, SkillTool
 from tools import BuiltinTool, ToolRegistry
 
@@ -67,6 +68,7 @@ def print_banner(session: SessionContext):
         "提示: 支持 DAG 拓扑多任务拆解编排 (create_task / claim_task / list_tasks)。\n"
         "提示: 支持后台异步作业托管 (run_in_background + list_jobs)。\n"
         "提示: 支持专业技能渐进式按需加载 (load_skill)。\n"
+        "提示: 支持跨进程 MCP 标准协议工具扩展 (connect_mcp，内置服务: system_info)。\n"
         "提示: 输入 /clear 重置会话上下文并开启全新 Session 空间。\n"
         "提示: 输入 /memory 查看当前持久化知识库目录。\n"
         "提示: 输入 q 或 exit 退出程序。\n"
@@ -102,6 +104,7 @@ async def main():
         registry.register_plugin(DAGTaskTool(store=task_store))
         registry.register_plugin(SubAgentTool(client=client))
         registry.register_plugin(SkillTool(loader=skill_loader))
+        registry.register_plugin(MCPTool.from_config(workdir / "mcp.json", workdir=workdir))
         registry.register_plugin(CompactTool(compactor=compactor, client=client))
 
         memory_mgr = MemoryManager(workdir=workdir)
@@ -124,76 +127,79 @@ async def main():
         # 外层会话循环 (Outer Loop) - 维护连续的多轮会话历史 (Session Context)
         session_messages: list[dict] = []
 
-        while True:
-            try:
-                user_input = read_terminal_input("\ntriumph >> ")
-            except (EOFError, KeyboardInterrupt):
-                logger.info("接收到中断信号，triumph-agent 正在安全退出。")
-                break
+        try:
+            while True:
+                try:
+                    user_input = read_terminal_input("\ntriumph >> ")
+                except (EOFError, KeyboardInterrupt):
+                    logger.info("接收到中断信号，triumph-agent 正在安全退出。")
+                    break
 
-            if not user_input:
-                continue
+                if not user_input:
+                    continue
 
-            if user_input.lower() in ("q", "quit", "exit"):
-                logger.info("用户主动退出，再见！")
-                break
+                if user_input.lower() in ("q", "quit", "exit"):
+                    logger.info("用户主动退出，再见！")
+                    break
 
-            if user_input.lower() in ("/clear", "clear"):
-                session_messages.clear()
-                session.reset()
-                # 重建 session 作用域下的 task_store，开启崭新看板
-                task_store.tasks_dir = session.tasks_dir
-                task_store.tasks_dir.mkdir(parents=True, exist_ok=True)
-                print(f"\n[已重置并开启全新 Session 空间]: {session.session_id}")
-                print(f"  [新任务看板]: {session.tasks_dir.relative_to(session.workdir)}")
-                print(f"  [新轨迹目录]: {session.runs_dir.relative_to(session.workdir)}")
-                continue
+                if user_input.lower() in ("/clear", "clear"):
+                    session_messages.clear()
+                    session.reset()
+                    # 重建 session 作用域下的 task_store，开启崭新看板
+                    task_store.tasks_dir = session.tasks_dir
+                    task_store.tasks_dir.mkdir(parents=True, exist_ok=True)
+                    print(f"\n[已重置并开启全新 Session 空间]: {session.session_id}")
+                    print(f"  [新任务看板]: {session.tasks_dir.relative_to(session.workdir)}")
+                    print(f"  [新轨迹目录]: {session.runs_dir.relative_to(session.workdir)}")
+                    continue
 
-            if user_input.lower() in ("/memory", "memory"):
-                index_text = memory_mgr.storage.read_index()
-                if index_text:
-                    print(f"\n[当前长期记忆目录]:\n{index_text}")
+                if user_input.lower() in ("/memory", "memory"):
+                    index_text = memory_mgr.storage.read_index()
+                    if index_text:
+                        print(f"\n[当前长期记忆目录]:\n{index_text}")
+                    else:
+                        print("\n[当前长期记忆目录为空]")
+                    continue
+
+                # 为当前任务初始化独立的 AgentState，并继承会话级多轮历史
+                state = AgentState(max_steps=20)
+                if session_messages:
+                    state.messages.extend(session_messages)
+                state.add_user_message(user_input)
+                state.current_goal = user_input
+
+                logger.info("启动自主执行任务 | Run ID: {} | 携带历史上下文: {} 条消息", state.run_id, len(session_messages))
+                start_time = asyncio.get_event_loop().time()
+
+                try:
+                    # 唤醒内层 ReAct 自主执行循环
+                    await loop_engine.run(state)
+                except Exception as e:
+                    state.mark_failed(f"未知异常中断: {e}")
+                    logger.error("运行时出现未捕获异常: {}", e)
+
+                elapsed = asyncio.get_event_loop().time() - start_time
+
+                # 结构化输出执行报告与会话状态延续
+                if state.status == AgentStatus.SUCCESS:
+                    # 成功后将本轮产生的最新上下文平滑继承至会话历史中
+                    session_messages = list(state.messages)
+                    logger.success(
+                        "任务执行成功 | 步数: {} | 耗时: {:.2f}s | Token开销: {} | 当前会话上下文深度: {} 条",
+                        state.step_count,
+                        elapsed,
+                        state.total_tokens,
+                        len(session_messages),
+                    )
                 else:
-                    print("\n[当前长期记忆目录为空]")
-                continue
-
-            # 为当前任务初始化独立的 AgentState，并继承会话级多轮历史
-            state = AgentState(max_steps=20)
-            if session_messages:
-                state.messages.extend(session_messages)
-            state.add_user_message(user_input)
-            state.current_goal = user_input
-
-            logger.info("启动自主执行任务 | Run ID: {} | 携带历史上下文: {} 条消息", state.run_id, len(session_messages))
-            start_time = asyncio.get_event_loop().time()
-
-            try:
-                # 唤醒内层 ReAct 自主执行循环
-                await loop_engine.run(state)
-            except Exception as e:
-                state.mark_failed(f"未知异常中断: {e}")
-                logger.error("运行时出现未捕获异常: {}", e)
-
-            elapsed = asyncio.get_event_loop().time() - start_time
-
-            # 结构化输出执行报告与会话状态延续
-            if state.status == AgentStatus.SUCCESS:
-                # 成功后将本轮产生的最新上下文平滑继承至会话历史中
-                session_messages = list(state.messages)
-                logger.success(
-                    "任务执行成功 | 步数: {} | 耗时: {:.2f}s | Token开销: {} | 当前会话上下文深度: {} 条",
-                    state.step_count,
-                    elapsed,
-                    state.total_tokens,
-                    len(session_messages),
-                )
-            else:
-                logger.error(
-                    "任务执行中断/失败 | 状态: {} | 步数: {} | 错误: {}",
-                    state.status.value,
-                    state.step_count,
-                    state.last_error,
-                )
+                    logger.error(
+                        "任务执行中断/失败 | 状态: {} | 步数: {} | 错误: {}",
+                        state.status.value,
+                        state.step_count,
+                        state.last_error,
+                    )
+        finally:
+            await registry.close()
 
 
 if __name__ == "__main__":

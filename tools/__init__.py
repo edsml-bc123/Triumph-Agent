@@ -16,10 +16,11 @@ triumph-agent 工具系统 (Tools Engine)
 """
 
 from .builtin import BuiltinTool
-from .registry import ToolPlugin, ToolRegistry
+from .registry import ClosablePlugin, ToolPlugin, ToolRegistry
 
 __all__ = [
     "BuiltinTool",
     "ToolRegistry",
     "ToolPlugin",
+    "ClosablePlugin",
 ]

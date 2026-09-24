@@ -34,6 +34,18 @@ class ToolPlugin(Protocol):
         ...
 
 
+@runtime_checkable
+class ClosablePlugin(ToolPlugin, Protocol):
+    """
+    具备生命周期析构回收能力的工具插件契约协议 (PEP 544 Protocol)
+    继承自 ToolPlugin，扩展协程生命周期清理接口。
+    """
+
+    async def close(self) -> None:
+        """统一释放插件持有的底层系统资源与远程连接"""
+        ...
+
+
 class ToolRegistry:
     """
     工业级工具注册与安全派发中心 (Pure Tool Container)
@@ -44,6 +56,7 @@ class ToolRegistry:
         self.workdir = (workdir or Path.cwd()).resolve()
         self._handlers: Dict[str, Callable[..., Any]] = {}
         self._specs: Dict[str, Dict[str, Any]] = {}
+        self._plugins: List[ToolPlugin] = []
 
     # ------------------------------------------------------------------
     # 1. 物理沙箱与路径安全防逃逸
@@ -92,6 +105,7 @@ class ToolRegistry:
         统一工具插件装配协议 (对齐 HookManager.register_plugin)：
         挂载遵循 ToolPlugin 协议契约规范的复合工具插件。
         """
+        self._plugins.append(plugin)
         plugin.register_to(self)
 
     def fork(self, exclude: Optional[Iterable[str]] = None) -> ToolRegistry:
@@ -145,3 +159,12 @@ class ToolRegistry:
             )
         except Exception as e:
             return f"Error: Unexpected failure while executing '{name}': {e}"
+
+    async def close(self) -> None:
+        """
+        统一生命周期清理：安全释放所有具备析构清理能力的插件系统资源。
+        """
+        for plugin in self._plugins:
+            if isinstance(plugin, ClosablePlugin):
+                await plugin.close()
+        self._plugins.clear()

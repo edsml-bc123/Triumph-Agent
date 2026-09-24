@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "system_info": {
+      "command": "python",
+      "args": [
+        "mcp_servers/system_server.py"
+      ],
+      "description": "查询宿主机的操作系统平台、内核版本、CPU架构与硬件磁盘存储负载情况"
+    }
+  }
+}
